@@ -1,0 +1,15 @@
+# QueenBee 数据库配置文件模板
+# 复制此文件为 database.conf 并填写实际配置
+
+[mysql]
+host = localhost
+port = 3306
+database = queenbee
+username = your_username
+password = your_password
+charset = utf8mb4
+
+[connection]
+# 连接池配置
+max_connections = 20
+timeout = 30

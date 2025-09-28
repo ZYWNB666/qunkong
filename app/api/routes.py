@@ -151,6 +151,7 @@ def get_agent_details(agent_id):
 
     # 从数据库获取Agent系统信息
     agent_info = server_instance.db.get_agent_system_info(agent_id)
+    
     if not agent_info:
         return jsonify({'error': 'Agent not found'}), 404
     

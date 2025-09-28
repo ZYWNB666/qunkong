@@ -248,27 +248,39 @@
                   <el-card class="metric-card">
                     <div class="metric-header">
                       <span>CPU使用率</span>
-                      <span class="metric-value">23.5%</span>
+                      <span class="metric-value">{{ currentAgent.system_info.cpu_usage?.toFixed(1) || 0 }}%</span>
                     </div>
-                    <el-progress :percentage="23.5" :show-text="false" />
+                    <el-progress 
+                      :percentage="currentAgent.system_info.cpu_usage || 0" 
+                      :show-text="false" 
+                      :color="getCpuColor(currentAgent.system_info.cpu_usage || 0)"
+                    />
                   </el-card>
                 </el-col>
                 <el-col :span="8">
                   <el-card class="metric-card">
                     <div class="metric-header">
                       <span>内存使用率</span>
-                      <span class="metric-value">52.5%</span>
+                      <span class="metric-value">{{ currentAgent.system_info.memory_usage?.toFixed(1) || 0 }}%</span>
                     </div>
-                    <el-progress :percentage="52.5" :show-text="false" color="#f56c6c" />
+                    <el-progress 
+                      :percentage="currentAgent.system_info.memory_usage || 0" 
+                      :show-text="false" 
+                      :color="getMemoryColor(currentAgent.system_info.memory_usage || 0)"
+                    />
                   </el-card>
                 </el-col>
                 <el-col :span="8">
                   <el-card class="metric-card">
                     <div class="metric-header">
                       <span>磁盘使用率</span>
-                      <span class="metric-value">45.0%</span>
+                      <span class="metric-value">{{ currentAgent.system_info.disk_usage?.toFixed(1) || 0 }}%</span>
                     </div>
-                    <el-progress :percentage="45.0" :show-text="false" color="#67c23a" />
+                    <el-progress 
+                      :percentage="currentAgent.system_info.disk_usage || 0" 
+                      :show-text="false" 
+                      :color="getDiskColor(currentAgent.system_info.disk_usage || 0)"
+                    />
                   </el-card>
                 </el-col>
               </el-row>
@@ -728,29 +740,46 @@ export default {
           register_time: agent.register_time,
           last_heartbeat: agent.last_heartbeat,
           region: agent.region || 'default',
-          system_info: {
-            os: 'Ubuntu 20.04 LTS',
-            kernel: 'Linux 5.4.0-74-generic',
-            cpu: 'Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz (4 cores)',
-            memory: '8GB (Used: 4.2GB, Free: 3.8GB)',
-            disk: '100GB SSD (Used: 45GB, Free: 55GB)',
-            network: 'eth0: 1000Mbps, lo: loopback',
-            uptime: '15 days, 8 hours, 32 minutes',
-            load_average: '0.15, 0.18, 0.12'
-          }
+          system_info: null // 初始为null，等待从服务器获取
         }
         
-        // 尝试获取详细信息
+        // 获取详细的系统信息
         try {
           const detailedData = await agentApi.getAgentDetails(agent.id)
           if (detailedData && detailedData.system_info) {
+            currentAgent.value.system_info = detailedData.system_info
+          } else {
+            // 如果没有系统信息，设置默认提示
             currentAgent.value.system_info = {
-              ...currentAgent.value.system_info,
-              ...detailedData.system_info
+              os: '暂无数据',
+              kernel: '暂无数据',
+              cpu: '暂无数据',
+              memory: '暂无数据',
+              disk: '暂无数据',
+              network: '暂无数据',
+              uptime: '暂无数据',
+              load_average: '暂无数据',
+              cpu_usage: 0,
+              memory_usage: 0,
+              disk_usage: 0
             }
           }
         } catch (detailError) {
-          console.log('获取详细信息失败，使用默认信息')
+          console.log('获取详细信息失败:', detailError)
+          // 设置错误状态的系统信息
+          currentAgent.value.system_info = {
+            os: '获取失败',
+            kernel: '获取失败',
+            cpu: '获取失败',
+            memory: '获取失败',
+            disk: '获取失败',
+            network: '获取失败',
+            uptime: '获取失败',
+            load_average: '获取失败',
+            cpu_usage: 0,
+            memory_usage: 0,
+            disk_usage: 0
+          }
         }
         
         showAgentDialog.value = true
@@ -934,6 +963,24 @@ export default {
       return new Date(dateTime).toLocaleString('zh-CN')
     }
 
+    const getCpuColor = (usage) => {
+      if (usage < 50) return '#67c23a'  // 绿色
+      if (usage < 80) return '#e6a23c'  // 橙色
+      return '#f56c6c'  // 红色
+    }
+
+    const getMemoryColor = (usage) => {
+      if (usage < 60) return '#67c23a'  // 绿色
+      if (usage < 85) return '#e6a23c'  // 橙色
+      return '#f56c6c'  // 红色
+    }
+
+    const getDiskColor = (usage) => {
+      if (usage < 70) return '#67c23a'  // 绿色
+      if (usage < 90) return '#e6a23c'  // 橙色
+      return '#f56c6c'  // 红色
+    }
+
     onMounted(() => {
       loadUserPreferences()
       loadAgents()
@@ -985,7 +1032,10 @@ export default {
       formatDateTime,
       startAutoRefresh,
       stopAutoRefresh,
-      handleRefreshIntervalChange
+      handleRefreshIntervalChange,
+      getCpuColor,
+      getMemoryColor,
+      getDiskColor
     }
   }
 }

@@ -268,3 +268,11 @@ dist/
 # Local configuration files
 config.local.py
 settings.local.py
+
+# Database configuration
+config/database.conf
+
+# SQLite database files (legacy)
+*.db
+*.sqlite
+*.sqlite3

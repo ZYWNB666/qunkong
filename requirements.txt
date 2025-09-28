@@ -1,0 +1,5 @@
+flask==2.3.3
+websockets==11.0.3
+psutil==5.9.5
+pymysql==1.1.0
+configparser==6.0.0

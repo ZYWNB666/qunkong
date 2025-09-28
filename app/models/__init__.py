@@ -1,8 +1,10 @@
 """
 QueenBee 数据库模型
 """
-import sqlite3
+import pymysql
 import hashlib
+import configparser
+import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import json
@@ -10,80 +12,146 @@ import json
 class DatabaseManager:
     """数据库管理器"""
     
-    def __init__(self, db_path: str = "queenbee.db"):
-        self.db_path = db_path
+    def __init__(self, config_path: str = "config/database.conf"):
+        self.config_path = config_path
+        self.db_config = self._load_config()
         self.init_database()
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """加载数据库配置"""
+        if not os.path.exists(self.config_path):
+            raise FileNotFoundError(f"数据库配置文件不存在: {self.config_path}")
+        
+        config = configparser.ConfigParser()
+        config.read(self.config_path, encoding='utf-8')
+        
+        return {
+            'host': config.get('mysql', 'host'),
+            'port': config.getint('mysql', 'port'),
+            'database': config.get('mysql', 'database'),
+            'username': config.get('mysql', 'username'),
+            'password': config.get('mysql', 'password'),
+            'charset': config.get('mysql', 'charset', fallback='utf8mb4'),
+            'max_connections': config.getint('connection', 'max_connections', fallback=20),
+            'timeout': config.getint('connection', 'timeout', fallback=30)
+        }
+    
+    def _get_connection(self):
+        """获取数据库连接"""
+        return pymysql.connect(
+            host=self.db_config['host'],
+            port=self.db_config['port'],
+            user=self.db_config['username'],
+            password=self.db_config['password'],
+            database=self.db_config['database'],
+            charset=self.db_config['charset'],
+            autocommit=True,
+            cursorclass=pymysql.cursors.DictCursor
+        )
     
     def init_database(self):
         """初始化数据库表"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # 创建执行历史表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS execution_history (
-                id TEXT PRIMARY KEY,
-                script_name TEXT,
-                script_content TEXT,
-                script_params TEXT,
-                target_hosts TEXT,  -- JSON格式存储
-                status TEXT,
-                created_at TEXT,
-                started_at TEXT,
-                completed_at TEXT,
-                timeout INTEGER,
-                execution_user TEXT,
-                results TEXT,  -- JSON格式存储
-                error_message TEXT
-            )
-        ''')
-        
-        # 创建Agent系统信息表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS agent_system_info (
-                agent_id TEXT PRIMARY KEY,
-                hostname TEXT,
-                ip_address TEXT,
-                last_heartbeat TEXT,
-                status TEXT,
-                register_time TEXT,
-                system_info TEXT,  -- JSON格式存储系统信息
-                network_info TEXT,  -- JSON格式存储网卡信息
-                memory_info TEXT,  -- JSON格式存储内存信息
-                disk_info TEXT,    -- JSON格式存储磁盘信息
-                cpu_info TEXT,     -- JSON格式存储CPU信息
-                FOREIGN KEY (agent_id) REFERENCES agents (id)
-            )
-        ''')
-        
-        # 创建Agent基本信息表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS agents (
-                id TEXT PRIMARY KEY,
-                hostname TEXT,
-                ip_address TEXT,
-                status TEXT,
-                last_heartbeat TEXT,
-                register_time TEXT,
-                websocket_info TEXT  -- JSON格式存储WebSocket连接信息
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # 创建Agent基本信息表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS agents (
+                    id VARCHAR(64) PRIMARY KEY,
+                    hostname VARCHAR(255) NOT NULL,
+                    ip_address VARCHAR(45) NOT NULL,
+                    status VARCHAR(20) DEFAULT 'OFFLINE',
+                    last_heartbeat DATETIME,
+                    register_time DATETIME,
+                    websocket_info JSON,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_hostname (hostname),
+                    INDEX idx_ip_address (ip_address),
+                    INDEX idx_status (status),
+                    INDEX idx_last_heartbeat (last_heartbeat)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ''')
+            
+            # 创建执行历史表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS execution_history (
+                    id VARCHAR(64) PRIMARY KEY,
+                    script_name VARCHAR(255) NOT NULL,
+                    script_content LONGTEXT,
+                    script_params TEXT,
+                    target_hosts JSON,
+                    status VARCHAR(20) DEFAULT 'PENDING',
+                    created_at DATETIME,
+                    started_at DATETIME,
+                    completed_at DATETIME,
+                    timeout INT DEFAULT 7200,
+                    execution_user VARCHAR(100) DEFAULT 'root',
+                    results JSON,
+                    error_message TEXT,
+                    created_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_script_name (script_name),
+                    INDEX idx_status (status),
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_execution_user (execution_user)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ''')
+            
+            # 创建Agent系统信息表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS agent_system_info (
+                    agent_id VARCHAR(64) PRIMARY KEY,
+                    hostname VARCHAR(255) NOT NULL,
+                    ip_address VARCHAR(45) NOT NULL,
+                    last_heartbeat DATETIME,
+                    status VARCHAR(20) DEFAULT 'OFFLINE',
+                    register_time DATETIME,
+                    system_info JSON,
+                    network_info JSON,
+                    memory_info JSON,
+                    disk_info JSON,
+                    cpu_info JSON,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+                    INDEX idx_hostname (hostname),
+                    INDEX idx_ip_address (ip_address),
+                    INDEX idx_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ''')
+            
+            conn.close()
+            print("数据库表初始化完成")
+        except Exception as e:
+            print(f"数据库初始化失败: {e}")
+            raise
     
     def save_execution_history(self, task_data: Dict[str, Any]) -> bool:
         """保存执行历史到数据库"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT OR REPLACE INTO execution_history 
+                INSERT INTO execution_history 
                 (id, script_name, script_content, script_params, target_hosts, 
                  status, created_at, started_at, completed_at, timeout, 
                  execution_user, results, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                script_name = VALUES(script_name),
+                script_content = VALUES(script_content),
+                script_params = VALUES(script_params),
+                target_hosts = VALUES(target_hosts),
+                status = VALUES(status),
+                started_at = VALUES(started_at),
+                completed_at = VALUES(completed_at),
+                timeout = VALUES(timeout),
+                execution_user = VALUES(execution_user),
+                results = VALUES(results),
+                error_message = VALUES(error_message)
             ''', (
                 task_data.get('id'),
                 task_data.get('script_name', '未命名任务'),
@@ -94,13 +162,12 @@ class DatabaseManager:
                 task_data.get('created_at'),
                 task_data.get('started_at'),
                 task_data.get('completed_at'),
-                task_data.get('timeout', 300),
+                task_data.get('timeout', 7200),
                 task_data.get('execution_user', 'root'),
                 json.dumps(task_data.get('results', {})),
                 task_data.get('error_message', '')
             ))
             
-            conn.commit()
             conn.close()
             return True
         except Exception as e:
@@ -110,7 +177,7 @@ class DatabaseManager:
     def get_execution_history(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取执行历史"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -119,7 +186,7 @@ class DatabaseManager:
                        execution_user, results, error_message
                 FROM execution_history
                 ORDER BY created_at DESC
-                LIMIT ? OFFSET ?
+                LIMIT %s OFFSET %s
             ''', (limit, offset))
             
             rows = cursor.fetchall()
@@ -127,21 +194,25 @@ class DatabaseManager:
             
             history = []
             for row in rows:
+                # 处理JSON字段
+                target_hosts = row['target_hosts'] if isinstance(row['target_hosts'], list) else json.loads(row['target_hosts']) if row['target_hosts'] else []
+                results = row['results'] if isinstance(row['results'], dict) else json.loads(row['results']) if row['results'] else {}
+                
                 history.append({
-                    'id': row[0],
-                    'script_name': row[1],
-                    'script': row[2],  # 保持script字段名一致
-                    'script_content': row[2],  # 同时提供script_content别名
-                    'script_params': row[3],
-                    'target_hosts': json.loads(row[4]) if row[4] else [],
-                    'status': row[5],
-                    'created_at': row[6],
-                    'started_at': row[7],
-                    'completed_at': row[8],
-                    'timeout': row[9],
-                    'execution_user': row[10],
-                    'results': json.loads(row[11]) if row[11] else {},
-                    'error_message': row[12]
+                    'id': row['id'],
+                    'script_name': row['script_name'],
+                    'script': row['script_content'],  # 保持script字段名一致
+                    'script_content': row['script_content'],  # 同时提供script_content别名
+                    'script_params': row['script_params'],
+                    'target_hosts': target_hosts,
+                    'status': row['status'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                    'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                    'timeout': row['timeout'],
+                    'execution_user': row['execution_user'],
+                    'results': results,
+                    'error_message': row['error_message']
                 })
             
             return history
@@ -152,14 +223,42 @@ class DatabaseManager:
     def save_agent_system_info(self, agent_id: str, system_info: Dict[str, Any]) -> bool:
         """保存Agent系统信息"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
+            # 从system_info中提取各个部分
+            sys_info = system_info.get('system_info', {})
+            if isinstance(sys_info, dict):
+                # 如果system_info是嵌套的结构，提取各个部分
+                system_info_json = json.dumps(sys_info.get('system_info', {}))
+                network_info_json = json.dumps(sys_info.get('network_info', {}))
+                memory_info_json = json.dumps(sys_info.get('memory_info', {}))
+                disk_info_json = json.dumps(sys_info.get('disk_info', {}))
+                cpu_info_json = json.dumps(sys_info.get('cpu_info', {}))
+            else:
+                # 如果system_info直接包含格式化后的信息
+                system_info_json = json.dumps(sys_info)
+                network_info_json = json.dumps({})
+                memory_info_json = json.dumps({})
+                disk_info_json = json.dumps({})
+                cpu_info_json = json.dumps({})
+            
             cursor.execute('''
-                INSERT OR REPLACE INTO agent_system_info
+                INSERT INTO agent_system_info
                 (agent_id, hostname, ip_address, last_heartbeat, status, register_time,
                  system_info, network_info, memory_info, disk_info, cpu_info)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                hostname = VALUES(hostname),
+                ip_address = VALUES(ip_address),
+                last_heartbeat = VALUES(last_heartbeat),
+                status = VALUES(status),
+                register_time = VALUES(register_time),
+                system_info = VALUES(system_info),
+                network_info = VALUES(network_info),
+                memory_info = VALUES(memory_info),
+                disk_info = VALUES(disk_info),
+                cpu_info = VALUES(cpu_info)
             ''', (
                 agent_id,
                 system_info.get('hostname', ''),
@@ -167,14 +266,13 @@ class DatabaseManager:
                 system_info.get('last_heartbeat', ''),
                 system_info.get('status', 'OFFLINE'),
                 system_info.get('register_time', ''),
-                json.dumps(system_info.get('system_info', {})),
-                json.dumps(system_info.get('network_info', {})),
-                json.dumps(system_info.get('memory_info', {})),
-                json.dumps(system_info.get('disk_info', {})),
-                json.dumps(system_info.get('cpu_info', {}))
+                system_info_json,
+                network_info_json,
+                memory_info_json,
+                disk_info_json,
+                cpu_info_json
             ))
             
-            conn.commit()
             conn.close()
             return True
         except Exception as e:
@@ -184,33 +282,41 @@ class DatabaseManager:
     def get_agent_system_info(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """获取Agent系统信息"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
                 SELECT agent_id, hostname, ip_address, last_heartbeat, status, register_time,
                        system_info, network_info, memory_info, disk_info, cpu_info
                 FROM agent_system_info
-                WHERE agent_id = ?
+                WHERE agent_id = %s
             ''', (agent_id,))
             
             row = cursor.fetchone()
             conn.close()
             
             if row:
+                # 处理JSON字段
+                system_info = row['system_info'] if isinstance(row['system_info'], dict) else json.loads(row['system_info']) if row['system_info'] else {}
+                network_info = row['network_info'] if isinstance(row['network_info'], dict) else json.loads(row['network_info']) if row['network_info'] else {}
+                memory_info = row['memory_info'] if isinstance(row['memory_info'], dict) else json.loads(row['memory_info']) if row['memory_info'] else {}
+                disk_info = row['disk_info'] if isinstance(row['disk_info'], dict) else json.loads(row['disk_info']) if row['disk_info'] else {}
+                cpu_info = row['cpu_info'] if isinstance(row['cpu_info'], dict) else json.loads(row['cpu_info']) if row['cpu_info'] else {}
+                
                 return {
-                    'agent_id': row[0],
-                    'hostname': row[1],
-                    'ip_address': row[2],
-                    'last_heartbeat': row[3],
-                    'status': row[4],
-                    'register_time': row[5],
-                    'system_info': json.loads(row[6]) if row[6] else {},
-                    'network_info': json.loads(row[7]) if row[7] else {},
-                    'memory_info': json.loads(row[8]) if row[8] else {},
-                    'disk_info': json.loads(row[9]) if row[9] else {},
-                    'cpu_info': json.loads(row[10]) if row[10] else {}
+                    'agent_id': row['agent_id'],
+                    'hostname': row['hostname'],
+                    'ip_address': row['ip_address'],
+                    'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
+                    'status': row['status'],
+                    'register_time': row['register_time'].isoformat() if row['register_time'] else None,
+                    'system_info': system_info,
+                    'network_info': network_info,
+                    'memory_info': memory_info,
+                    'disk_info': disk_info,
+                    'cpu_info': cpu_info
                 }
+            
             return None
         except Exception as e:
             print(f"获取Agent系统信息失败: {e}")
@@ -219,13 +325,20 @@ class DatabaseManager:
     def save_agent(self, agent_data: Dict[str, Any]) -> bool:
         """保存Agent基本信息"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT OR REPLACE INTO agents
+                INSERT INTO agents
                 (id, hostname, ip_address, status, last_heartbeat, register_time, websocket_info)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                hostname = VALUES(hostname),
+                ip_address = VALUES(ip_address),
+                status = VALUES(status),
+                last_heartbeat = VALUES(last_heartbeat),
+                register_time = VALUES(register_time),
+                websocket_info = VALUES(websocket_info)
             ''', (
                 agent_data.get('id'),
                 agent_data.get('hostname', ''),
@@ -236,7 +349,6 @@ class DatabaseManager:
                 json.dumps(agent_data.get('websocket_info', {}))
             ))
             
-            conn.commit()
             conn.close()
             return True
         except Exception as e:
@@ -246,7 +358,7 @@ class DatabaseManager:
     def get_all_agents(self) -> List[Dict[str, Any]]:
         """获取所有Agent信息"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -260,14 +372,17 @@ class DatabaseManager:
             
             agents = []
             for row in rows:
+                # 处理JSON字段
+                websocket_info = row['websocket_info'] if isinstance(row['websocket_info'], dict) else json.loads(row['websocket_info']) if row['websocket_info'] else {}
+                
                 agents.append({
-                    'id': row[0],
-                    'hostname': row[1],
-                    'ip_address': row[2],
-                    'status': row[3],
-                    'last_heartbeat': row[4],
-                    'register_time': row[5],
-                    'websocket_info': json.loads(row[6]) if row[6] else {}
+                    'id': row['id'],
+                    'hostname': row['hostname'],
+                    'ip_address': row['ip_address'],
+                    'status': row['status'],
+                    'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
+                    'register_time': row['register_time'].isoformat() if row['register_time'] else None,
+                    'websocket_info': websocket_info
                 })
             
             return agents

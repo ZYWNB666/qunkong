@@ -78,12 +78,24 @@ class QueenBeeAgent:
                 if platform.system() == "Windows":
                     try:
                         # Windows系统获取CPU型号
-                        result = subprocess.run(['wmic', 'cpu', 'get', 'name'],
+                        result = subprocess.run(['wmic', 'cpu', 'get', 'name', '/format:list'],
                                               capture_output=True, text=True, timeout=5)
                         if result.returncode == 0:
-                            lines = result.stdout.strip().split('\n')
-                            if len(lines) > 1:
-                                cpu_info['model'] = lines[1].strip()
+                            for line in result.stdout.split('\n'):
+                                if line.startswith('Name='):
+                                    cpu_info['model'] = line.split('=', 1)[1].strip()
+                                    break
+                        
+                        # 如果wmic失败，尝试从注册表获取
+                        if not cpu_info.get('model'):
+                            try:
+                                import winreg
+                                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                                                   r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                                cpu_info['model'] = winreg.QueryValueEx(key, "ProcessorNameString")[0]
+                                winreg.CloseKey(key)
+                            except:
+                                pass
                     except:
                         pass
                 else:
@@ -141,9 +153,10 @@ class QueenBeeAgent:
                             'total': partition_usage.total,
                             'used': partition_usage.used,
                             'free': partition_usage.free,
-                            'percent': partition_usage.percent
+                            'percent': round(partition_usage.percent, 1)
                         })
-                    except PermissionError:
+                    except (PermissionError, OSError):
+                        # 跳过无法访问的分区
                         continue
             except Exception as e:
                 logger.warning(f"获取磁盘信息失败: {e}")
@@ -182,8 +195,37 @@ class QueenBeeAgent:
                 logger.warning(f"获取系统特定信息失败: {e}")
                 system_specific = {}
 
+            # 格式化系统信息以匹配前端显示需求
+            formatted_system_info = {
+                # 操作系统信息
+                'os': f"{system_info.get('system', 'Unknown')} {system_info.get('release', '')}",
+                'kernel': system_info.get('version', 'Unknown'),
+                'architecture': system_info.get('architecture', 'Unknown'),
+                'hostname': system_info.get('hostname', 'Unknown'),
+                
+                # CPU信息
+                'cpu': self._format_cpu_info(cpu_info),
+                'cpu_usage': psutil.cpu_percent(interval=1),
+                'cpu_count': cpu_info.get('cpu_count', 0),
+                
+                # 内存信息
+                'memory': self._format_memory_info(memory_info),
+                'memory_usage': memory_info.get('percent', 0) if memory_info else 0,
+                
+                # 磁盘信息
+                'disk': self._format_disk_info(disk_info),
+                'disk_usage': self._get_disk_usage_percent(disk_info),
+                
+                # 网络信息
+                'network': self._format_network_info(network_info),
+                
+                # 系统运行时间和负载
+                'uptime': self._get_system_uptime(),
+                'load_average': self._get_load_average(),
+            }
+
             return {
-                'system_info': system_info,
+                'system_info': formatted_system_info,
                 'cpu_info': cpu_info,
                 'memory_info': memory_info,
                 'disk_info': disk_info,
@@ -277,6 +319,117 @@ class QueenBeeAgent:
             pass
 
         return info
+
+    def _format_cpu_info(self, cpu_info):
+        """格式化CPU信息"""
+        if not cpu_info:
+            return "Unknown CPU"
+        
+        cpu_model = cpu_info.get('model', 'Unknown CPU')
+        cpu_count = cpu_info.get('cpu_count', 0)
+        
+        if cpu_count > 0:
+            return f"{cpu_model} ({cpu_count} cores)"
+        return cpu_model
+
+    def _format_memory_info(self, memory_info):
+        """格式化内存信息"""
+        if not memory_info:
+            return "Unknown Memory"
+        
+        total = memory_info.get('total', 0)
+        used = memory_info.get('used', 0)
+        free = memory_info.get('free', 0)
+        
+        if total > 0:
+            total_gb = total / (1024**3)
+            used_gb = used / (1024**3)
+            free_gb = free / (1024**3)
+            return f"{total_gb:.1f}GB (Used: {used_gb:.1f}GB, Free: {free_gb:.1f}GB)"
+        
+        return "Unknown Memory"
+
+    def _format_disk_info(self, disk_info):
+        """格式化磁盘信息"""
+        if not disk_info or len(disk_info) == 0:
+            return "Unknown Disk"
+        
+        # 获取主要磁盘信息（通常是第一个）
+        main_disk = disk_info[0] if disk_info else {}
+        total = main_disk.get('total', 0)
+        used = main_disk.get('used', 0)
+        free = main_disk.get('free', 0)
+        device = main_disk.get('device', 'Unknown')
+        
+        if total > 0:
+            total_gb = total / (1024**3)
+            used_gb = used / (1024**3)
+            free_gb = free / (1024**3)
+            return f"{device}: {total_gb:.1f}GB (Used: {used_gb:.1f}GB, Free: {free_gb:.1f}GB)"
+        
+        return "Unknown Disk"
+
+    def _format_network_info(self, network_info):
+        """格式化网络信息"""
+        if not network_info:
+            return "Unknown Network"
+        
+        interfaces = []
+        for interface in network_info:
+            name = interface.get('interface', 'Unknown')
+            addresses = interface.get('addresses', [])
+            
+            # 找到IPv4地址
+            ipv4_addr = None
+            for addr in addresses:
+                if 'IPv4' in str(addr.get('family', '')) or addr.get('family') == '2':
+                    ipv4_addr = addr.get('address')
+                    break
+            
+            if ipv4_addr and not ipv4_addr.startswith('127.'):
+                interfaces.append(f"{name}: {ipv4_addr}")
+        
+        return ', '.join(interfaces) if interfaces else "No active interfaces"
+
+    def _get_disk_usage_percent(self, disk_info):
+        """获取磁盘使用率"""
+        if not disk_info or len(disk_info) == 0:
+            return 0
+        
+        main_disk = disk_info[0] if disk_info else {}
+        return main_disk.get('percent', 0)
+
+    def _get_system_uptime(self):
+        """获取系统运行时间"""
+        try:
+            import time
+            uptime_seconds = time.time() - psutil.boot_time()
+            
+            days = int(uptime_seconds // 86400)
+            hours = int((uptime_seconds % 86400) // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+            
+            if days > 0:
+                return f"{days} days, {hours} hours, {minutes} minutes"
+            elif hours > 0:
+                return f"{hours} hours, {minutes} minutes"
+            else:
+                return f"{minutes} minutes"
+        except:
+            return "Unknown"
+
+    def _get_load_average(self):
+        """获取系统负载"""
+        try:
+            if platform.system() != "Windows":
+                load_avg = os.getloadavg()
+                return f"{load_avg[0]:.2f}, {load_avg[1]:.2f}, {load_avg[2]:.2f}"
+            else:
+                # Windows没有load average概念，返回CPU使用率
+                cpu_percent = psutil.cpu_percent(interval=1)
+                return f"CPU: {cpu_percent}%"
+        except:
+            return "Unknown"
 
     def _convert_bash_to_batch(self, script):
         """将bash脚本转换为Windows批处理脚本的基本转换"""
