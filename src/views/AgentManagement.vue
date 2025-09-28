@@ -5,10 +5,25 @@
         <div class="card-header">
           <span class="page-title">Agent管理</span>
           <div class="header-actions">
-            <el-button type="primary" @click="refreshAgents">
-              <el-icon><Refresh /></el-icon>
-              刷新
-            </el-button>
+            <el-select 
+              v-model="refreshInterval" 
+              @change="handleRefreshIntervalChange"
+              size="small"
+              style="width: 140px"
+            >
+              <el-option label="关闭自动刷新" :value="0" />
+              <el-option label="1秒刷新" :value="1000" />
+              <el-option label="3秒刷新" :value="3000" />
+              <el-option label="5秒刷新" :value="5000" />
+              <el-option label="10秒刷新" :value="10000" />
+            </el-select>
+            <el-tag 
+              :type="refreshInterval > 0 ? 'success' : 'info'" 
+              size="small"
+            >
+              <el-icon><Clock /></el-icon>
+              {{ refreshInterval > 0 ? `自动刷新中 (${refreshInterval/1000}s)` : '自动刷新已关闭' }}
+            </el-tag>
             <el-button @click="showBatchDialog = true">
               <el-icon><Operation /></el-icon>
               批量管理
@@ -47,6 +62,10 @@
             </el-select>
           </el-col>
           <el-col :span="8">
+            <el-button type="primary" @click="refreshAgents" :loading="loading">
+              <el-icon><Refresh /></el-icon>
+              刷新
+            </el-button>
             <el-button @click="resetFilters">
               <el-icon><Delete /></el-icon>
               重置筛选
@@ -482,7 +501,7 @@
 </template>
 
 <script>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, scriptApi } from '../api'
@@ -504,6 +523,8 @@ export default {
     const showRestartConfirmDialog = ref(false)
     const currentRestartAgent = ref(null)
     const restartType = ref('agent')
+    const refreshTimer = ref(null)
+    const refreshInterval = ref(5000) // 默认5秒刷新
 
     const filters = reactive({
       keyword: '',
@@ -575,9 +596,11 @@ export default {
       return result.slice(start, end)
     })
 
-    const loadAgents = async () => {
+    const loadAgents = async (showLoading = true) => {
       try {
-        loading.value = true
+        if (showLoading) {
+          loading.value = true
+        }
         const data = await agentApi.getServers()
         
         // 处理Agent数据，确保字段正确
@@ -595,9 +618,13 @@ export default {
         
         pagination.total = agents.value.length
       } catch (error) {
-        ElMessage.error('加载Agent列表失败')
+        if (showLoading) {
+          ElMessage.error('加载Agent列表失败')
+        }
       } finally {
-        loading.value = false
+        if (showLoading) {
+          loading.value = false
+        }
       }
     }
 
@@ -619,6 +646,44 @@ export default {
 
     const refreshAgents = () => {
       loadAgents()
+    }
+
+    const startAutoRefresh = (interval = refreshInterval.value) => {
+      // 清除已存在的定时器
+      stopAutoRefresh()
+      
+      // 如果间隔为0，则不启动定时器
+      if (interval <= 0) {
+        return
+      }
+      
+      // 设置自动刷新
+      refreshTimer.value = setInterval(() => {
+        loadAgents(false) // 静默刷新，不显示loading
+      }, interval)
+    }
+
+    const stopAutoRefresh = () => {
+      if (refreshTimer.value) {
+        clearInterval(refreshTimer.value)
+        refreshTimer.value = null
+      }
+    }
+
+    const handleRefreshIntervalChange = (newInterval) => {
+      // 保存用户偏好到本地存储
+      localStorage.setItem('agentManagementRefreshInterval', newInterval.toString())
+      
+      // 重新启动自动刷新
+      startAutoRefresh(newInterval)
+    }
+
+    const loadUserPreferences = () => {
+      // 从本地存储加载用户偏好
+      const savedInterval = localStorage.getItem('agentManagementRefreshInterval')
+      if (savedInterval !== null) {
+        refreshInterval.value = parseInt(savedInterval)
+      }
     }
 
     const filterAgents = () => {
@@ -795,21 +860,26 @@ export default {
           { type: 'warning' }
         )
         
-        // 这里调用重启API
+        // 调用重启API
         if (restartType.value === 'host') {
+          await agentApi.restartHost(currentRestartAgent.value.id)
           ElMessage.success(`主机 ${currentRestartAgent.value.hostname} 重启请求已发送`)
-          // TODO: 调用重启主机API
         } else {
+          await agentApi.restartAgent(currentRestartAgent.value.id)
           ElMessage.success(`Agent ${currentRestartAgent.value.hostname} 重启请求已发送`)
-          // TODO: 调用重启Agent API
         }
         
         showRestartConfirmDialog.value = false
         currentRestartAgent.value = null
         
+        // 刷新Agent列表
+        setTimeout(() => {
+          refreshAgents()
+        }, 2000)
+        
       } catch (error) {
         if (error.message && error.message !== 'cancel') {
-          ElMessage.error('重启操作失败: ' + error.message)
+          ElMessage.error('重启操作失败: ' + (error.response?.data?.error || error.message))
         }
       }
     }
@@ -865,7 +935,13 @@ export default {
     }
 
     onMounted(() => {
+      loadUserPreferences()
       loadAgents()
+      startAutoRefresh()
+    })
+
+    onUnmounted(() => {
+      stopAutoRefresh()
     })
 
     return {
@@ -882,6 +958,7 @@ export default {
       showRestartConfirmDialog,
       currentRestartAgent,
       restartType,
+      refreshInterval,
       filters,
       pagination,
       batchForm,
@@ -905,7 +982,10 @@ export default {
       getAgentStatusType,
       getAgentStatusText,
       isAgentOnline,
-      formatDateTime
+      formatDateTime,
+      startAutoRefresh,
+      stopAutoRefresh,
+      handleRefreshIntervalChange
     }
   }
 }

@@ -500,9 +500,138 @@ class QueenBeeAgent:
                 
                 await self.websocket.send(json.dumps(result_message))
                 logger.info(f"任务 {task_id} 执行完成")
+            elif msg_type == 'restart_agent':
+                # 重启Agent
+                logger.info("收到重启Agent命令")
+                await self.handle_restart_agent()
+            elif msg_type == 'restart_host':
+                # 重启主机
+                logger.info("收到重启主机命令")
+                await self.handle_restart_host()
                 
         except Exception as e:
             logger.error(f"处理服务器消息失败: {e}")
+
+    async def handle_restart_agent(self):
+        """处理重启Agent命令"""
+        try:
+            # 发送重启响应
+            response_message = {
+                'type': 'restart_agent_response',
+                'agent_id': self.agent_id,
+                'restart_type': 'agent',
+                'success': True,
+                'message': 'Agent restart initiated'
+            }
+            await self.websocket.send(json.dumps(response_message))
+            
+            logger.info("Agent重启中...")
+            
+            # 设置停止标志
+            self.running = False
+            
+            # 延迟一点时间让响应发送完成
+            await asyncio.sleep(1)
+            
+            # 重启Agent进程
+            import os
+            import sys
+            
+            # 获取当前脚本的完整路径和参数
+            python_executable = sys.executable
+            script_path = os.path.abspath(__file__)
+            
+            # 构建重启命令
+            restart_cmd = [python_executable, script_path]
+            
+            # 添加原始启动参数（如果有的话）
+            if hasattr(sys, 'argv') and len(sys.argv) > 1:
+                restart_cmd.extend(sys.argv[1:])
+            
+            logger.info(f"重启命令: {' '.join(restart_cmd)}")
+            
+            # 启动新进程
+            import subprocess
+            subprocess.Popen(restart_cmd, 
+                           cwd=os.getcwd(),
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            
+            # 退出当前进程
+            os._exit(0)
+            
+        except Exception as e:
+            logger.error(f"重启Agent失败: {e}")
+            # 发送失败响应
+            try:
+                error_response = {
+                    'type': 'restart_agent_response',
+                    'agent_id': self.agent_id,
+                    'restart_type': 'agent',
+                    'success': False,
+                    'error_message': str(e)
+                }
+                await self.websocket.send(json.dumps(error_response))
+            except:
+                pass
+
+    async def handle_restart_host(self):
+        """处理重启主机命令"""
+        try:
+            import platform
+            import subprocess
+            
+            system_type = platform.system().lower()
+            
+            # 发送重启响应
+            response_message = {
+                'type': 'restart_host_response',
+                'agent_id': self.agent_id,
+                'restart_type': 'host',
+                'success': True,
+                'message': f'Host restart initiated on {system_type}'
+            }
+            await self.websocket.send(json.dumps(response_message))
+            
+            logger.info(f"主机重启中... (系统类型: {system_type})")
+            
+            # 延迟一点时间让响应发送完成
+            await asyncio.sleep(2)
+            
+            # 根据操作系统执行重启命令
+            if system_type == 'windows':
+                # Windows重启命令
+                subprocess.run(['shutdown', '/r', '/t', '10', '/c', 'QueenBee Agent requested restart'], 
+                             check=False)
+            elif system_type in ['linux', 'darwin']:
+                # Linux/macOS重启命令
+                try:
+                    # 尝试使用systemctl (systemd)
+                    subprocess.run(['sudo', 'systemctl', 'reboot'], check=False, timeout=5)
+                except:
+                    try:
+                        # 备用方案：使用reboot命令
+                        subprocess.run(['sudo', 'reboot'], check=False, timeout=5)
+                    except:
+                        # 最后备用方案：使用shutdown命令
+                        subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
+            else:
+                raise Exception(f"不支持的操作系统: {system_type}")
+                
+        except Exception as e:
+            logger.error(f"重启主机失败: {e}")
+            # 发送失败响应
+            try:
+                error_response = {
+                    'type': 'restart_host_response',
+                    'agent_id': self.agent_id,
+                    'restart_type': 'host',
+                    'success': False,
+                    'error_message': str(e)
+                }
+                await self.websocket.send(json.dumps(error_response))
+            except:
+                pass
 
     async def run(self):
         """运行Agent"""

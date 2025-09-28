@@ -55,7 +55,13 @@ export const agentApi = {
   getAgentDetails: (agentId) => api.get(`/agents/${agentId}`),
   
   // 获取Agent的执行历史
-  getAgentTasks: (agentId) => api.get(`/agents/${agentId}/tasks`)
+  getAgentTasks: (agentId) => api.get(`/agents/${agentId}/tasks`),
+  
+  // 重启Agent
+  restartAgent: (agentId) => api.post(`/agents/${agentId}/restart`),
+  
+  // 重启主机
+  restartHost: (agentId) => api.post(`/agents/${agentId}/restart-host`)
 }
 
 export default api

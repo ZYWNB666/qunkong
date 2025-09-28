@@ -1,6 +1,7 @@
 """
 API路由定义
 """
+import json
 from flask import Blueprint, jsonify, request
 from app.models import DatabaseManager
 from dataclasses import asdict
@@ -308,3 +309,95 @@ def get_agent_tasks(agent_id):
     
     except Exception as e:
         return jsonify({'error': f'获取Agent任务失败: {str(e)}'}), 500
+
+@api_bp.route('/agents/<agent_id>/restart', methods=['POST'])
+def restart_agent(agent_id):
+    """重启Agent"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        # 检查Agent是否存在
+        if agent_id not in server_instance.agents:
+            return jsonify({'error': 'Agent not found'}), 404
+        
+        agent = server_instance.agents[agent_id]
+        if agent.status != 'ONLINE':
+            return jsonify({'error': 'Agent is not online'}), 400
+        
+        # 发送重启Agent命令
+        import asyncio
+        import threading
+        
+        def send_restart_command():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def restart_task():
+                try:
+                    restart_message = {
+                        'type': 'restart_agent',
+                        'agent_id': agent_id,
+                        'message': 'Server requested agent restart'
+                    }
+                    await agent.websocket.send(json.dumps(restart_message))
+                except Exception as e:
+                    print(f"发送重启Agent命令失败: {e}")
+            
+            loop.run_until_complete(restart_task())
+            loop.close()
+        
+        thread = threading.Thread(target=send_restart_command)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'message': f'Agent {agent_id} restart command sent successfully'})
+    
+    except Exception as e:
+        return jsonify({'error': f'重启Agent失败: {str(e)}'}), 500
+
+@api_bp.route('/agents/<agent_id>/restart-host', methods=['POST'])
+def restart_host(agent_id):
+    """重启主机"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        # 检查Agent是否存在
+        if agent_id not in server_instance.agents:
+            return jsonify({'error': 'Agent not found'}), 404
+        
+        agent = server_instance.agents[agent_id]
+        if agent.status != 'ONLINE':
+            return jsonify({'error': 'Agent is not online'}), 400
+        
+        # 发送重启主机命令
+        import asyncio
+        import threading
+        
+        def send_restart_command():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def restart_task():
+                try:
+                    restart_message = {
+                        'type': 'restart_host',
+                        'agent_id': agent_id,
+                        'message': 'Server requested host restart'
+                    }
+                    await agent.websocket.send(json.dumps(restart_message))
+                except Exception as e:
+                    print(f"发送重启主机命令失败: {e}")
+            
+            loop.run_until_complete(restart_task())
+            loop.close()
+        
+        thread = threading.Thread(target=send_restart_command)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'message': f'Host restart command sent to agent {agent_id} successfully'})
+    
+    except Exception as e:
+        return jsonify({'error': f'重启主机失败: {str(e)}'}), 500

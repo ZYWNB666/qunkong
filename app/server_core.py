@@ -153,6 +153,10 @@ class QueenBeeServer:
                     logger.debug(f"Agent {agent_id} 心跳已更新: {current_time}")
             elif msg_type == 'task_result':
                 await self.handle_task_result(message)
+            elif msg_type == 'restart_agent_response':
+                await self.handle_restart_response(message)
+            elif msg_type == 'restart_host_response':
+                await self.handle_restart_response(message)
             else:
                 logger.warning(f"未知消息类型: {msg_type}")
                 
@@ -195,6 +199,18 @@ class QueenBeeServer:
                     'error_message': getattr(task, 'error_message', '')
                 }
                 self.db.save_execution_history(task_data)
+
+    async def handle_restart_response(self, message: dict):
+        """处理重启响应"""
+        agent_id = message.get('agent_id')
+        restart_type = message.get('restart_type', 'unknown')
+        success = message.get('success', False)
+        error_message = message.get('error_message', '')
+        
+        if success:
+            logger.info(f"Agent {agent_id} {restart_type} 重启成功")
+        else:
+            logger.error(f"Agent {agent_id} {restart_type} 重启失败: {error_message}")
 
     async def handle_client(self, websocket, path):
         """处理客户端连接"""
