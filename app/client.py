@@ -63,7 +63,7 @@ class QueenBeeAgent:
                 'architecture': platform.architecture()[0]
             }
 
-            logger.info(f"收集到系统信息: {system_info}")
+            logger.info("收集到系统信息: {}".format(system_info))
 
             # CPU信息
             try:
@@ -110,7 +110,7 @@ class QueenBeeAgent:
                         pass
 
             except Exception as e:
-                logger.warning(f"获取CPU信息失败: {e}")
+                logger.warning("获取CPU信息失败: {}".format(e))
                 cpu_info = {}
 
             # 内存信息
@@ -137,7 +137,7 @@ class QueenBeeAgent:
                     pass
 
             except Exception as e:
-                logger.warning(f"获取内存信息失败: {e}")
+                logger.warning("获取内存信息失败: {}".format(e))
                 memory_info = {}
 
             # 磁盘信息
@@ -159,7 +159,7 @@ class QueenBeeAgent:
                         # 跳过无法访问的分区
                         continue
             except Exception as e:
-                logger.warning(f"获取磁盘信息失败: {e}")
+                logger.warning("获取磁盘信息失败: {}".format(e))
                 disk_info = []
 
             # 网络信息
@@ -179,7 +179,7 @@ class QueenBeeAgent:
                         })
                     network_info.append(interface_info)
             except Exception as e:
-                logger.warning(f"获取网络信息失败: {e}")
+                logger.warning("获取网络信息失败: {}".format(e))
                 network_info = []
 
             # 系统特定信息
@@ -192,13 +192,13 @@ class QueenBeeAgent:
                     # Linux/Unix特定信息
                     system_specific = self._get_linux_info()
             except Exception as e:
-                logger.warning(f"获取系统特定信息失败: {e}")
+                logger.warning("获取系统特定信息失败: {}".format(e))
                 system_specific = {}
 
             # 格式化系统信息以匹配前端显示需求
             formatted_system_info = {
                 # 操作系统信息
-                'os': f"{system_info.get('system', 'Unknown')} {system_info.get('release', '')}",
+                'os': "{} {}".format(system_info.get('system', 'Unknown'), system_info.get('release', '')),
                 'kernel': system_info.get('version', 'Unknown'),
                 'architecture': system_info.get('architecture', 'Unknown'),
                 'hostname': system_info.get('hostname', 'Unknown'),
@@ -233,7 +233,7 @@ class QueenBeeAgent:
                 'system_specific': system_specific
             }
         except Exception as e:
-            logger.error(f"获取系统信息失败: {e}")
+            logger.error("获取系统信息失败: {}".format(e))
             return {}
 
     def _get_windows_info(self):
@@ -329,7 +329,7 @@ class QueenBeeAgent:
         cpu_count = cpu_info.get('cpu_count', 0)
         
         if cpu_count > 0:
-            return f"{cpu_model} ({cpu_count} cores)"
+            return "{} ({} cores)".format(cpu_model, cpu_count)
         return cpu_model
 
     def _format_memory_info(self, memory_info):
@@ -345,7 +345,7 @@ class QueenBeeAgent:
             total_gb = total / (1024**3)
             used_gb = used / (1024**3)
             free_gb = free / (1024**3)
-            return f"{total_gb:.1f}GB (Used: {used_gb:.1f}GB, Free: {free_gb:.1f}GB)"
+            return "{:.1f}GB (Used: {:.1f}GB, Free: {:.1f}GB)".format(total_gb, used_gb, free_gb)
         
         return "Unknown Memory"
 
@@ -365,7 +365,7 @@ class QueenBeeAgent:
             total_gb = total / (1024**3)
             used_gb = used / (1024**3)
             free_gb = free / (1024**3)
-            return f"{device}: {total_gb:.1f}GB (Used: {used_gb:.1f}GB, Free: {free_gb:.1f}GB)"
+            return "{}: {:.1f}GB (Used: {:.1f}GB, Free: {:.1f}GB)".format(device, total_gb, used_gb, free_gb)
         
         return "Unknown Disk"
 
@@ -387,7 +387,7 @@ class QueenBeeAgent:
                     break
             
             if ipv4_addr and not ipv4_addr.startswith('127.'):
-                interfaces.append(f"{name}: {ipv4_addr}")
+                interfaces.append("{}: {}".format(name, ipv4_addr))
         
         return ', '.join(interfaces) if interfaces else "No active interfaces"
 
@@ -410,11 +410,11 @@ class QueenBeeAgent:
             minutes = int((uptime_seconds % 3600) // 60)
             
             if days > 0:
-                return f"{days} days, {hours} hours, {minutes} minutes"
+                return "{} days, {} hours, {} minutes".format(days, hours, minutes)
             elif hours > 0:
-                return f"{hours} hours, {minutes} minutes"
+                return "{} hours, {} minutes".format(hours, minutes)
             else:
-                return f"{minutes} minutes"
+                return "{} minutes".format(minutes)
         except:
             return "Unknown"
 
@@ -423,11 +423,11 @@ class QueenBeeAgent:
         try:
             if platform.system() != "Windows":
                 load_avg = os.getloadavg()
-                return f"{load_avg[0]:.2f}, {load_avg[1]:.2f}, {load_avg[2]:.2f}"
+                return "{:.2f}, {:.2f}, {:.2f}".format(load_avg[0], load_avg[1], load_avg[2])
             else:
                 # Windows没有load average概念，返回CPU使用率
                 cpu_percent = psutil.cpu_percent(interval=1)
-                return f"CPU: {cpu_percent}%"
+                return "CPU: {}%".format(cpu_percent)
         except:
             return "Unknown"
 
@@ -479,16 +479,25 @@ class QueenBeeAgent:
         }
 
         await self.websocket.send(json.dumps(register_message))
-        logger.info(f"向服务器注册: {self.hostname}")
+        logger.info("向服务器注册: {}".format(self.hostname))
 
-    async def send_heartbeat(self):
+    async def send_heartbeat(self, websocket=None):
         """发送心跳"""
-        heartbeat_message = {
-            'type': 'heartbeat',
-            'agent_id': self.agent_id,
-            'timestamp': datetime.now().isoformat()
-        }
-        await self.websocket.send(json.dumps(heartbeat_message))
+        if websocket is None:
+            websocket = self.websocket
+        try:
+            heartbeat_message = {
+                'type': 'heartbeat',
+                'agent_id': self.agent_id,
+                'timestamp': datetime.now().isoformat()
+            }
+            message_json = json.dumps(heartbeat_message)
+            logger.debug("发送心跳消息: {}".format(message_json[:100]))
+            await websocket.send(message_json)
+            logger.debug("心跳已发送")
+        except Exception as e:
+            logger.error("send_heartbeat 内部异常: {} (类型: {})".format(e, type(e).__name__))
+            raise
 
     async def execute_script(self, script, script_params="", timeout=7200, execution_user="root", task_id=None):
         """执行脚本"""
@@ -503,9 +512,9 @@ class QueenBeeAgent:
         try:
             # 生成临时文件名，使用task_id作为文件名的一部分
             if task_id:
-                temp_filename = f"queenbee_script_{task_id}.sh"
+                temp_filename = "queenbee_script_{}.sh".format(task_id)
             else:
-                temp_filename = f"queenbee_script_{int(time.time())}.sh"
+                temp_filename = "queenbee_script_{}.sh".format(int(time.time()))
             
             # 创建临时脚本文件
             temp_dir = tempfile.gettempdir()
@@ -567,7 +576,7 @@ class QueenBeeAgent:
                     # 如果参数解析失败，按简单空格分割
                     cmd.extend(script_params.split())
             
-            logger.debug(f"执行命令: {' '.join(cmd)}")
+            logger.debug("执行命令: {}".format(' '.join(cmd)))
             
             # 执行脚本
             # Windows下需要指定编码以避免GBK编码问题
@@ -612,9 +621,9 @@ class QueenBeeAgent:
             if temp_script_path and os.path.exists(temp_script_path):
                 try:
                     os.remove(temp_script_path)
-                    logger.debug(f"已删除临时脚本文件: {temp_script_path}")
+                    logger.debug("已删除临时脚本文件: {}".format(temp_script_path))
                 except Exception as e:
-                    logger.warning(f"删除临时脚本文件失败: {e}")
+                    logger.warning("删除临时脚本文件失败: {}".format(e))
 
     async def handle_server_message(self, message):
         """处理服务器消息"""
@@ -623,7 +632,7 @@ class QueenBeeAgent:
             msg_type = data.get('type')
             
             if msg_type == 'register_confirm':
-                logger.info(f"注册确认: {data.get('message')}")
+                logger.info("注册确认: {}".format(data.get('message')))
             elif msg_type == 'execute_task':
                 # 执行任务
                 task_id = data.get('task_id')
@@ -632,7 +641,7 @@ class QueenBeeAgent:
                 timeout = data.get('timeout', 7200)
                 execution_user = data.get('execution_user', 'root')
                 
-                logger.info(f"收到执行任务: {task_id}")
+                logger.info("收到执行任务: {}".format(task_id))
                 
                 # 执行脚本，传递task_id用于生成临时文件名
                 result = await self.execute_script(
@@ -652,7 +661,7 @@ class QueenBeeAgent:
                 }
                 
                 await self.websocket.send(json.dumps(result_message))
-                logger.info(f"任务 {task_id} 执行完成")
+                logger.info("任务 {} 执行完成".format(task_id))
             elif msg_type == 'restart_agent':
                 # 重启Agent
                 logger.info("收到重启Agent命令")
@@ -663,7 +672,7 @@ class QueenBeeAgent:
                 await self.handle_restart_host()
                 
         except Exception as e:
-            logger.error(f"处理服务器消息失败: {e}")
+            logger.error("处理服务器消息失败: {}".format(e))
 
     async def handle_restart_agent(self):
         """处理重启Agent命令"""
@@ -701,7 +710,7 @@ class QueenBeeAgent:
             if hasattr(sys, 'argv') and len(sys.argv) > 1:
                 restart_cmd.extend(sys.argv[1:])
             
-            logger.info(f"重启命令: {' '.join(restart_cmd)}")
+            logger.info("重启命令: {}".format(' '.join(restart_cmd)))
             
             # 启动新进程
             import subprocess
@@ -714,7 +723,7 @@ class QueenBeeAgent:
             os._exit(0)
             
         except Exception as e:
-            logger.error(f"重启Agent失败: {e}")
+            logger.error("重启Agent失败: {}".format(e))
             # 发送失败响应
             try:
                 error_response = {
@@ -746,7 +755,7 @@ class QueenBeeAgent:
             }
             await self.websocket.send(json.dumps(response_message))
             
-            logger.info(f"主机重启中... (系统类型: {system_type})")
+            logger.info("主机重启中... (系统类型: {})".format(system_type))
             
             # 延迟一点时间让响应发送完成
             await asyncio.sleep(2)
@@ -769,10 +778,10 @@ class QueenBeeAgent:
                         # 最后备用方案：使用shutdown命令
                         subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
             else:
-                raise Exception(f"不支持的操作系统: {system_type}")
+                raise Exception("不支持的操作系统: {}".format(system_type))
                 
         except Exception as e:
-            logger.error(f"重启主机失败: {e}")
+            logger.error("重启主机失败: {}".format(e))
             # 发送失败响应
             try:
                 error_response = {
@@ -789,8 +798,8 @@ class QueenBeeAgent:
     async def run(self):
         """运行Agent"""
         self.running = True
-        logger.info(f"Agent 初始化: {self.hostname} ({self.ip})")
-        logger.info(f"QueenBee Agent 启动: {self.hostname}")
+        logger.info("Agent 初始化: {} ({})".format(self.hostname, self.ip))
+        logger.info("QueenBee Agent 启动: {}".format(self.hostname))
         
         # 重连参数
         max_retries = 10
@@ -801,7 +810,7 @@ class QueenBeeAgent:
         
         while self.running and retry_count < max_retries:
             try:
-                logger.info(f"连接到服务器: ws://{self.server_host}:{self.server_port}")
+                logger.info("连接到服务器: ws://{}:{}".format(self.server_host, self.server_port))
                 
                 # 设置WebSocket连接参数
                 connect_kwargs = {
@@ -813,7 +822,7 @@ class QueenBeeAgent:
                 }
                 
                 async with websockets.connect(
-                    f"ws://{self.server_host}:{self.server_port}",
+                    "ws://{}:{}".format(self.server_host, self.server_port),
                     **connect_kwargs
                 ) as websocket:
                     self.websocket = websocket
@@ -826,27 +835,99 @@ class QueenBeeAgent:
                     heartbeat_task_handle = None
                     try:
                         async def heartbeat_task():
-                            while self.running and not websocket.closed:
+                            logger.info("心跳任务启动")
+                            consecutive_failures = 0
+                            # 等待一段时间再开始发送心跳，确保连接稳定
+                            await asyncio.sleep(1)
+                            logger.info("开始发送心跳")
+                            
+                            try:
+                                logger.info("检查心跳条件...")
+                                logger.info("self.running = {}".format(self.running))
+                                
+                                # 检查websocket状态 - 使用正确的方法
                                 try:
-                                    await self.send_heartbeat()
-                                    await asyncio.sleep(3)  # 每3秒发送一次心跳
-                                except websockets.exceptions.ConnectionClosed:
-                                    logger.warning("心跳发送失败: 连接已关闭")
-                                    break
-                                except Exception as e:
-                                    logger.error(f"心跳发送失败: {e}")
-                                    break
+                                    is_closed = hasattr(websocket, 'closed') and websocket.closed
+                                except:
+                                    is_closed = False
+                                logger.info("websocket is_closed = {}".format(is_closed))
+                                
+                                if not self.running:
+                                    logger.error("心跳任务退出: self.running=False")
+                                    return
+                                if is_closed:
+                                    logger.error("心跳任务退出: websocket已关闭")
+                                    return
+                                
+                                logger.info("准备开始心跳循环")
+                                heartbeat_count = 0
+                                # 使用更简单的条件检查
+                                while self.running:
+                                    heartbeat_count += 1
+                                    logger.info("=== 心跳循环 #{} 开始 ===".format(heartbeat_count))
+                                    
+                                    # 检查连接状态
+                                    try:
+                                        if hasattr(websocket, 'closed') and websocket.closed:
+                                            logger.warning("检测到websocket连接已关闭，退出心跳循环")
+                                            break
+                                    except:
+                                        pass
+                                    
+                                    try:
+                                        logger.debug("准备发送心跳")
+                                        await self.send_heartbeat(websocket)
+                                        consecutive_failures = 0  # 重置失败计数
+                                        logger.debug("心跳发送成功，等待3秒")
+                                        await asyncio.sleep(3)  # 每3秒发送一次心跳
+                                    except websockets.exceptions.ConnectionClosed:
+                                        logger.warning("心跳发送失败: 连接已关闭")
+                                        break
+                                    except Exception as e:
+                                        consecutive_failures += 1
+                                        logger.error("心跳发送失败: {} (类型: {})".format(e, type(e).__name__))
+                                        import traceback
+                                        logger.debug("心跳发送异常详情: {}".format(traceback.format_exc()))
+                                        # 只有连续失败多次才退出
+                                        if consecutive_failures >= 5:
+                                            logger.error("心跳连续失败5次，退出心跳任务")
+                                            break
+                                        await asyncio.sleep(3)  # 失败后等待重试
+                                logger.info("心跳循环结束")
+                            except Exception as debug_e:
+                                logger.error("心跳调试过程出错: {}".format(debug_e))
+                                import traceback
+                                logger.error("调试异常详情: {}".format(traceback.format_exc()))
+                            logger.info("心跳任务结束")
                         
                         heartbeat_task_handle = asyncio.create_task(heartbeat_task())
+                        logger.info("心跳任务已创建")
                         
                         # 处理服务器消息
-                        async for message in websocket:
-                            await self.handle_server_message(message)
+                        try:
+                            async for message in websocket:
+                                # 检查心跳任务是否异常结束
+                                if heartbeat_task_handle.done():
+                                    try:
+                                        await heartbeat_task_handle
+                                    except Exception as e:
+                                        logger.error("心跳任务异常结束: {} (类型: {})".format(e, type(e).__name__))
+                                        import traceback
+                                        logger.debug("心跳任务异常详情: {}".format(traceback.format_exc()))
+                                        # 重新启动心跳任务
+                                        logger.info("重新启动心跳任务")
+                                        heartbeat_task_handle = asyncio.create_task(heartbeat_task())
+                                
+                                await self.handle_server_message(message)
+                        except Exception as e:
+                            logger.error("消息处理循环异常: {} (类型: {})".format(e, type(e).__name__))
+                            import traceback
+                            logger.debug("消息处理循环异常详情: {}".format(traceback.format_exc()))
                             
                     except websockets.exceptions.ConnectionClosed:
                         logger.warning("WebSocket连接已关闭")
                     except Exception as e:
-                        logger.error(f"处理消息时出错: {e}")
+                        logger.error("处理消息时出错: {}".format(e))
                     finally:
                         # 取消心跳任务
                         if heartbeat_task_handle and not heartbeat_task_handle.done():
@@ -859,18 +940,18 @@ class QueenBeeAgent:
             except websockets.exceptions.ConnectionClosed:
                 logger.warning("WebSocket连接意外关闭")
             except websockets.exceptions.InvalidURI:
-                logger.error(f"无效的WebSocket URI: ws://{self.server_host}:{self.server_port}")
+                logger.error("无效的WebSocket URI: ws://{}:{}".format(self.server_host, self.server_port))
                 break
             except OSError as e:
-                logger.error(f"网络连接错误: {e}")
+                logger.error("网络连接错误: {}".format(e))
             except Exception as e:
-                logger.error(f"Agent 运行错误: {e}")
+                logger.error("Agent 运行错误: {}".format(e))
             
             # 如果还在运行状态，准备重连
             if self.running and retry_count < max_retries:
                 retry_count += 1
                 current_delay = min(retry_delay * (2 ** (retry_count - 1)), max_retry_delay)
-                logger.info(f"将在 {current_delay} 秒后尝试重连 (第 {retry_count}/{max_retries} 次)")
+                logger.info("将在 {} 秒后尝试重连 (第 {}/{} 次)".format(current_delay, retry_count, max_retries))
                 await asyncio.sleep(current_delay)
             elif retry_count >= max_retries:
                 logger.error("达到最大重连次数，Agent停止运行")
@@ -898,7 +979,7 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    logger.info(f"启动参数: 服务器={args.server}:{args.port}")
+    logger.info("启动参数: 服务器={}:{}".format(args.server, args.port))
     
     agent = QueenBeeAgent(
         server_host=args.server,
@@ -911,7 +992,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Agent 已停止")
     except Exception as e:
-        logger.error(f"Agent 启动失败: {e}")
+        logger.error("Agent 启动失败: {}".format(e))
 
 if __name__ == '__main__':
     main()
