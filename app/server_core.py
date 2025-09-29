@@ -7,7 +7,7 @@ import json
 import uuid
 import logging
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from app.models import DatabaseManager, generate_agent_id
 
@@ -33,8 +33,8 @@ class Task:
     target_hosts: List[str]
     status: str = "PENDING"
     created_at: str = ""
-    started_at: str = ""
-    completed_at: str = ""
+    started_at: Optional[str] = None  # 改为None，避免空字符串问题  
+    completed_at: Optional[str] = None  # 改为None，避免空字符串问题
     timeout: int = 7200
     results: Dict = None
     script_name: str = "未命名任务"

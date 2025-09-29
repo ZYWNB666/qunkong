@@ -134,6 +134,13 @@ class DatabaseManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             
+            # 处理日期时间字段，将空字符串转换为None
+            def convert_datetime(value):
+                """将空字符串或无效日期转换为None"""
+                if not value or value == '':
+                    return None
+                return value
+            
             cursor.execute('''
                 INSERT INTO execution_history 
                 (id, script_name, script_content, script_params, target_hosts, 
@@ -159,9 +166,9 @@ class DatabaseManager:
                 task_data.get('script_params', ''),
                 json.dumps(task_data.get('target_hosts', [])),
                 task_data.get('status'),
-                task_data.get('created_at'),
-                task_data.get('started_at'),
-                task_data.get('completed_at'),
+                convert_datetime(task_data.get('created_at')),
+                convert_datetime(task_data.get('started_at')),
+                convert_datetime(task_data.get('completed_at')),
                 task_data.get('timeout', 7200),
                 task_data.get('execution_user', 'root'),
                 json.dumps(task_data.get('results', {})),
