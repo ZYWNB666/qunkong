@@ -1227,7 +1227,7 @@ export default {
     
     const connectTerminalWebSocket = (agentId) => {
       try {
-        const wsUrl = `ws://localhost:8765/terminal/${agentId}`
+        const wsUrl = `ws://${__WEBSOCKET_HOST__}:${__WEBSOCKET_PORT__}/terminal/${agentId}`
         console.log('连接PTY终端WebSocket:', wsUrl)
         
         terminalWebSocket.value = new WebSocket(wsUrl)
@@ -1318,30 +1318,58 @@ export default {
     }
     
     const closeTerminal = () => {
-      // 清理事件监听器
-      window.removeEventListener('resize', handleTerminalResize)
-      
-      // 关闭WebSocket连接
-      if (terminalWebSocket.value) {
-        terminalWebSocket.value.close()
-        terminalWebSocket.value = null
+      try {
+        // 清理事件监听器
+        window.removeEventListener('resize', handleTerminalResize)
+        
+        // 关闭WebSocket连接
+        if (terminalWebSocket.value) {
+          try {
+            terminalWebSocket.value.close()
+          } catch (error) {
+            console.warn('关闭WebSocket连接时出错:', error)
+          }
+          terminalWebSocket.value = null
+        }
+        
+        // 清理xterm.js实例和插件
+        if (terminal.value) {
+          try {
+            // 清理插件引用，避免dispose时的插件错误
+            if (fitAddon.value) {
+              fitAddon.value = null
+            }
+            
+            if (webLinksAddon.value) {
+              webLinksAddon.value = null
+            }
+            
+            // 清理终端实例（会自动清理已加载的插件）
+            terminal.value.dispose()
+            terminal.value = null
+            
+          } catch (error) {
+            console.warn('清理终端实例时出错:', error)
+            // 强制清理引用，避免内存泄漏
+            terminal.value = null
+          }
+        }
+        
+        // 清理插件引用
+        fitAddon.value = null
+        webLinksAddon.value = null
+        
+        console.log('PTY终端WebSocket连接已关闭')
+        
+      } catch (error) {
+        console.error('关闭终端时发生错误:', error)
+      } finally {
+        // 无论如何都要重置状态
+        showTerminalDialog.value = false
+        currentTerminalAgent.value = null
+        terminalStatus.value = 'disconnected'
+        currentSessionId.value = null
       }
-      
-      // 清理xterm.js实例
-      if (terminal.value) {
-        terminal.value.dispose()
-        terminal.value = null
-      }
-      
-      // 清理插件
-      fitAddon.value = null
-      webLinksAddon.value = null
-      
-      // 重置状态
-      showTerminalDialog.value = false
-      currentTerminalAgent.value = null
-      terminalStatus.value = 'disconnected'
-      currentSessionId.value = null
     }
     
     const getTerminalStatusText = () => {
