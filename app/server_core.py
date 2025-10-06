@@ -6,7 +6,10 @@ import websockets
 import json
 import uuid
 import logging
-from datetime import datetime
+import hashlib
+import secrets
+import time
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from app.models import DatabaseManager, generate_agent_id
@@ -46,6 +49,135 @@ class Task:
         if self.results is None:
             self.results = {}
 
+@dataclass
+class TerminalSession:
+    """终端会话信息"""
+    session_id: str
+    agent_id: str
+    user_id: str = "admin"  # 当前用户ID
+    websocket: object = None
+    agent_websocket: object = None
+    created_at: str = ""
+    last_activity: str = ""
+    is_active: bool = True
+    command_history: List[str] = None
+    
+    def __post_init__(self):
+        if self.command_history is None:
+            self.command_history = []
+        if not self.created_at:
+            self.created_at = datetime.now().isoformat()
+        if not self.last_activity:
+            self.last_activity = datetime.now().isoformat()
+
+class TerminalManager:
+    """终端会话管理器"""
+    
+    def __init__(self):
+        self.sessions: Dict[str, TerminalSession] = {}
+        self.session_timeout = 1800  # 30分钟超时
+        self.max_sessions_per_agent = 3  # 每个Agent最大并发会话数
+        self.allowed_commands = [
+            # 基本命令
+            'ls', 'pwd', 'cd', 'cat', 'head', 'tail', 'grep', 'find',
+            'ps', 'top', 'htop', 'df', 'free', 'uname', 'whoami', 'id',
+            'netstat', 'ss', 'ping', 'curl', 'wget', 'systemctl', 'service',
+            # 文件操作
+            'mkdir', 'rmdir', 'cp', 'mv', 'rm', 'chmod', 'chown',
+            # 文本处理
+            'awk', 'sed', 'sort', 'uniq', 'wc', 'less', 'more',
+            # 网络工具
+            'nslookup', 'dig', 'traceroute',
+            # 系统信息
+            'lscpu', 'lsmem', 'lsblk', 'mount', 'uptime', 'date',
+            # 日志查看
+            'journalctl', 'dmesg'
+        ]
+        self.forbidden_commands = [
+            # 危险命令
+            'rm -rf', 'mkfs', 'dd', 'format', 'fdisk',
+            'shutdown', 'reboot', 'halt', 'poweroff',
+            'passwd', 'su', 'sudo', 'visudo',
+            # 网络危险操作
+            'iptables', 'firewall-cmd', 'ufw',
+            # 包管理
+            'apt-get', 'yum', 'dnf', 'pacman', 'pip', 'npm'
+        ]
+    
+    def create_session(self, agent_id: str, user_id: str, websocket) -> Optional[str]:
+        """创建终端会话"""
+        # 检查并发会话数限制
+        active_sessions = [s for s in self.sessions.values() 
+                          if s.agent_id == agent_id and s.is_active]
+        if len(active_sessions) >= self.max_sessions_per_agent:
+            return None
+        
+        session_id = secrets.token_urlsafe(32)
+        session = TerminalSession(
+            session_id=session_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            websocket=websocket
+        )
+        self.sessions[session_id] = session
+        logger.info(f"创建终端会话: {session_id} for agent {agent_id}")
+        return session_id
+    
+    def get_session(self, session_id: str) -> Optional[TerminalSession]:
+        """获取会话信息"""
+        return self.sessions.get(session_id)
+    
+    def close_session(self, session_id: str):
+        """关闭会话"""
+        if session_id in self.sessions:
+            session = self.sessions[session_id]
+            session.is_active = False
+            logger.info(f"关闭终端会话: {session_id}")
+            del self.sessions[session_id]
+    
+    def update_activity(self, session_id: str):
+        """更新会话活动时间"""
+        if session_id in self.sessions:
+            self.sessions[session_id].last_activity = datetime.now().isoformat()
+    
+    def is_command_allowed(self, command: str) -> tuple[bool, str]:
+        """检查命令是否允许执行"""
+        command = command.strip().lower()
+        
+        # 检查禁用命令
+        for forbidden in self.forbidden_commands:
+            if forbidden in command:
+                return False, f"命令被禁止: 包含危险操作 '{forbidden}'"
+        
+        # 提取命令的第一部分
+        cmd_parts = command.split()
+        if not cmd_parts:
+            return False, "空命令"
+        
+        base_cmd = cmd_parts[0]
+        
+        # 检查是否在允许列表中
+        if base_cmd in self.allowed_commands:
+            return True, "命令允许"
+        
+        # 对于不在白名单中的命令，给出警告
+        return False, f"命令不在允许列表中: '{base_cmd}'"
+    
+    def cleanup_expired_sessions(self):
+        """清理过期会话"""
+        now = datetime.now()
+        expired_sessions = []
+        
+        for session_id, session in self.sessions.items():
+            last_activity = datetime.fromisoformat(session.last_activity)
+            if (now - last_activity).total_seconds() > self.session_timeout:
+                expired_sessions.append(session_id)
+        
+        for session_id in expired_sessions:
+            self.close_session(session_id)
+        
+        return len(expired_sessions)
+
 class QunkongServer:
     """Qunkong 服务端主类"""
     
@@ -59,6 +191,10 @@ class QunkongServer:
         self.db = DatabaseManager()  # 初始化数据库管理器
         # 心跳检查任务
         self.heartbeat_check_task = None
+        # 终端管理器
+        self.terminal_manager = TerminalManager()
+        # 会话清理任务
+        self.session_cleanup_task = None
 
     async def register_agent(self, websocket, agent_info: dict):
         """注册 Agent"""
@@ -157,6 +293,16 @@ class QunkongServer:
                 await self.handle_restart_response(message)
             elif msg_type == 'restart_host_response':
                 await self.handle_restart_response(message)
+            elif msg_type == 'terminal_command':
+                await self.handle_terminal_command(message)
+            elif msg_type == 'terminal_output':
+                await self.handle_terminal_output(message)
+            elif msg_type == 'terminal_data':
+                await self.handle_pty_terminal_data(message)
+            elif msg_type == 'terminal_error':
+                await self.handle_pty_terminal_error(message)
+            elif msg_type == 'terminal_ready':
+                await self.handle_pty_terminal_ready(message)
             else:
                 logger.warning(f"未知消息类型: {msg_type}")
                 
@@ -212,10 +358,451 @@ class QunkongServer:
         else:
             logger.error(f"Agent {agent_id} {restart_type} 重启失败: {error_message}")
 
+    async def handle_terminal_command(self, message: dict):
+        """处理终端命令"""
+        session_id = message.get('session_id')
+        command = message.get('command', '').strip()
+        
+        if not session_id or not command:
+            return
+        
+        session = self.terminal_manager.get_session(session_id)
+        if not session or not session.is_active:
+            logger.warning(f"终端会话不存在或已关闭: {session_id}")
+            return
+        
+        # 更新会话活动时间
+        self.terminal_manager.update_activity(session_id)
+        
+        # 检查命令是否允许
+        allowed, reason = self.terminal_manager.is_command_allowed(command)
+        if not allowed:
+            error_response = {
+                'type': 'terminal_output',
+                'session_id': session_id,
+                'output': f"❌ 命令被拒绝: {reason}\n",
+                'error': True
+            }
+            try:
+                await session.websocket.send(json.dumps(error_response))
+            except:
+                pass
+            return
+        
+        # 记录命令历史
+        session.command_history.append({
+            'command': command,
+            'timestamp': datetime.now().isoformat(),
+            'user': session.user_id
+        })
+        
+        # 转发命令到Agent
+        if session.agent_id in self.agents:
+            agent = self.agents[session.agent_id]
+            if agent.websocket:
+                try:
+                    terminal_message = {
+                        'type': 'terminal_execute',
+                        'session_id': session_id,
+                        'command': command
+                    }
+                    await agent.websocket.send(json.dumps(terminal_message))
+                    logger.info(f"终端命令转发到Agent {session.agent_id}: {command}")
+                except Exception as e:
+                    logger.error(f"转发终端命令失败: {e}")
+                    error_response = {
+                        'type': 'terminal_output',
+                        'session_id': session_id,
+                        'output': f"❌ 命令执行失败: Agent连接异常\n",
+                        'error': True
+                    }
+                    try:
+                        await session.websocket.send(json.dumps(error_response))
+                    except:
+                        pass
+
+    async def handle_terminal_output(self, message: dict):
+        """处理终端输出"""
+        session_id = message.get('session_id')
+        output = message.get('output', '')
+        error = message.get('error', False)
+        
+        if not session_id:
+            return
+        
+        session = self.terminal_manager.get_session(session_id)
+        if not session or not session.is_active:
+            return
+        
+        # 转发输出到前端
+        try:
+            output_message = {
+                'type': 'terminal_output',
+                'session_id': session_id,
+                'output': output,
+                'error': error
+            }
+            await session.websocket.send(json.dumps(output_message))
+        except Exception as e:
+            logger.error(f"转发终端输出失败: {e}")
+
+    async def create_terminal_session(self, agent_id: str, user_id: str, websocket) -> Optional[str]:
+        """创建终端会话"""
+        # 检查Agent是否在线
+        if agent_id not in self.agents or self.agents[agent_id].status != "ONLINE":
+            return None
+        
+        # 创建会话
+        session_id = self.terminal_manager.create_session(agent_id, user_id, websocket)
+        if not session_id:
+            return None
+        
+        # 通知Agent启动终端
+        agent = self.agents[agent_id]
+        if agent.websocket:
+            try:
+                init_message = {
+                    'type': 'terminal_init',
+                    'session_id': session_id
+                }
+                await agent.websocket.send(json.dumps(init_message))
+                logger.info(f"终端会话初始化消息发送到Agent {agent_id}")
+            except Exception as e:
+                logger.error(f"发送终端初始化消息失败: {e}")
+                self.terminal_manager.close_session(session_id)
+                return None
+        
+        return session_id
+
+    async def close_terminal_session(self, session_id: str):
+        """关闭终端会话"""
+        session = self.terminal_manager.get_session(session_id)
+        if not session:
+            return
+        
+        # 通知Agent关闭终端
+        if session.agent_id in self.agents:
+            agent = self.agents[session.agent_id]
+            if agent.websocket:
+                try:
+                    close_message = {
+                        'type': 'terminal_close',
+                        'session_id': session_id
+                    }
+                    await agent.websocket.send(json.dumps(close_message))
+                except Exception as e:
+                    logger.error(f"发送终端关闭消息失败: {e}")
+        
+        # 关闭会话
+        self.terminal_manager.close_session(session_id)
+
+    async def create_pty_terminal_session(self, agent_id: str, user_id: str, websocket) -> Optional[str]:
+        """创建PTY终端会话"""
+        try:
+            # 检查Agent是否存在且在线
+            if agent_id not in self.agents:
+                logger.error(f"Agent {agent_id} 不存在")
+                return None
+            
+            agent = self.agents[agent_id]
+            if agent.status != 'ONLINE':
+                logger.error(f"Agent {agent_id} 不在线")
+                return None
+            
+            # 创建会话
+            session_id = self.terminal_manager.create_session(agent_id, user_id, websocket)
+            if session_id:
+                # 向Agent发送初始化消息（包含终端大小）
+                init_message = {
+                    'type': 'terminal_init',
+                    'session_id': session_id,
+                    'cols': 80,
+                    'rows': 24
+                }
+                try:
+                    await agent.websocket.send(json.dumps(init_message))
+                    logger.info(f"PTY终端会话 {session_id} 创建成功")
+                    return session_id
+                except Exception as e:
+                    logger.error(f"向Agent发送初始化消息失败: {e}")
+                    self.terminal_manager.close_session(session_id)
+                    return None
+            else:
+                logger.error(f"创建PTY终端会话失败，可能达到最大会话数限制")
+                return None
+                
+        except Exception as e:
+            logger.error(f"创建PTY终端会话失败: {e}")
+            return None
+
+    async def handle_pty_terminal_input(self, session_id: str, input_data: str):
+        """处理PTY终端输入"""
+        try:
+            session = self.terminal_manager.get_session(session_id)
+            if not session:
+                logger.warning(f"PTY终端会话不存在: {session_id}")
+                return
+            
+            # 更新活动时间
+            self.terminal_manager.update_activity(session_id)
+            
+            # 获取Agent
+            agent = self.agents.get(session.agent_id)
+            if not agent or agent.status != 'ONLINE':
+                logger.warning(f"Agent {session.agent_id} 不在线")
+                return
+            
+            # 转发输入到Agent
+            input_message = {
+                'type': 'terminal_input',
+                'session_id': session_id,
+                'data': input_data
+            }
+            await agent.websocket.send(json.dumps(input_message))
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端输入失败: {e}")
+
+    async def handle_pty_terminal_resize(self, session_id: str, cols: int, rows: int):
+        """处理PTY终端大小调整"""
+        try:
+            session = self.terminal_manager.get_session(session_id)
+            if not session:
+                logger.warning(f"PTY终端会话不存在: {session_id}")
+                return
+            
+            # 更新活动时间
+            self.terminal_manager.update_activity(session_id)
+            
+            # 获取Agent
+            agent = self.agents.get(session.agent_id)
+            if not agent or agent.status != 'ONLINE':
+                logger.warning(f"Agent {session.agent_id} 不在线")
+                return
+            
+            # 转发大小调整到Agent
+            resize_message = {
+                'type': 'terminal_resize',
+                'session_id': session_id,
+                'cols': cols,
+                'rows': rows
+            }
+            await agent.websocket.send(json.dumps(resize_message))
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端大小调整失败: {e}")
+
+    async def handle_pty_terminal_data(self, message: dict):
+        """处理PTY终端数据输出"""
+        try:
+            session_id = message.get('session_id')
+            data = message.get('data', '')
+            
+            session = self.terminal_manager.get_session(session_id)
+            if not session:
+                logger.warning(f"PTY终端会话不存在: {session_id}")
+                return
+            
+            # 转发数据到前端WebSocket
+            if session.websocket:
+                response = {
+                    'type': 'terminal_data',
+                    'session_id': session_id,
+                    'data': data
+                }
+                try:
+                    await session.websocket.send(json.dumps(response))
+                except Exception as e:
+                    logger.error(f"向前端发送PTY终端数据失败: {e}")
+                    # 会话可能已断开，清理会话
+                    await self.close_pty_terminal_session(session_id)
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端数据失败: {e}")
+
+    async def handle_pty_terminal_error(self, message: dict):
+        """处理PTY终端错误"""
+        try:
+            session_id = message.get('session_id')
+            error = message.get('error', '')
+            
+            session = self.terminal_manager.get_session(session_id)
+            if not session:
+                logger.warning(f"PTY终端会话不存在: {session_id}")
+                return
+            
+            # 转发错误到前端WebSocket
+            if session.websocket:
+                response = {
+                    'type': 'terminal_error',
+                    'session_id': session_id,
+                    'error': error
+                }
+                try:
+                    await session.websocket.send(json.dumps(response))
+                except Exception as e:
+                    logger.error(f"向前端发送PTY终端错误失败: {e}")
+            
+            # 记录错误日志
+            logger.error(f"PTY终端错误 {session_id}: {error}")
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端错误失败: {e}")
+
+    async def close_pty_terminal_session(self, session_id: str):
+        """关闭PTY终端会话"""
+        try:
+            session = self.terminal_manager.get_session(session_id)
+            if session:
+                # 向Agent发送关闭消息
+                agent = self.agents.get(session.agent_id)
+                if agent and agent.status == 'ONLINE':
+                    try:
+                        close_message = {
+                            'type': 'terminal_close',
+                            'session_id': session_id
+                        }
+                        await agent.websocket.send(json.dumps(close_message))
+                    except Exception as e:
+                        logger.error(f"向Agent发送终端关闭消息失败: {e}")
+            
+            # 关闭会话
+            self.terminal_manager.close_session(session_id)
+            logger.info(f"PTY终端会话 {session_id} 已关闭")
+            
+        except Exception as e:
+            logger.error(f"关闭PTY终端会话失败: {e}")
+
+    async def handle_pty_terminal_ready(self, message: dict):
+        """处理PTY终端就绪消息"""
+        try:
+            session_id = message.get('session_id')
+            
+            session = self.terminal_manager.get_session(session_id)
+            if not session:
+                logger.warning(f"PTY终端会话不存在: {session_id}")
+                return
+            
+            # 转发就绪消息到前端WebSocket
+            if session.websocket:
+                response = {
+                    'type': 'terminal_ready',
+                    'session_id': session_id,
+                    'cols': message.get('cols', 80),
+                    'rows': message.get('rows', 24)
+                }
+                try:
+                    await session.websocket.send(json.dumps(response))
+                    logger.info(f"PTY终端就绪消息已转发: {session_id}")
+                except Exception as e:
+                    logger.error(f"向前端发送PTY终端就绪消息失败: {e}")
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端就绪消息失败: {e}")
+
+    async def handle_terminal_websocket(self, websocket, agent_id: str):
+        """处理PTY终端WebSocket连接"""
+        session_id = None
+        try:
+            # 检查Agent是否在线
+            if agent_id not in self.agents:
+                error_msg = {
+                    'type': 'terminal_error',
+                    'error': f'Agent {agent_id} not found'
+                }
+                await websocket.send(json.dumps(error_msg))
+                return
+            
+            agent = self.agents[agent_id]
+            if agent.status != 'ONLINE':
+                error_msg = {
+                    'type': 'terminal_error', 
+                    'error': f'Agent {agent_id} is not online'
+                }
+                await websocket.send(json.dumps(error_msg))
+                return
+            
+            # 创建终端会话
+            session_id = await self.create_pty_terminal_session(agent_id, "admin", websocket)
+            if not session_id:
+                error_msg = {
+                    'type': 'terminal_error',
+                    'error': 'Failed to create PTY terminal session'
+                }
+                await websocket.send(json.dumps(error_msg))
+                return
+            
+            logger.info(f"PTY终端WebSocket连接已建立: session_id={session_id}, agent_id={agent_id}")
+            
+            # 发送连接成功消息
+            success_msg = {
+                'type': 'terminal_ready',
+                'session_id': session_id,
+                'agent_id': agent_id
+            }
+            await websocket.send(json.dumps(success_msg))
+            
+            # 处理WebSocket消息
+            try:
+                async for message in websocket:
+                    try:
+                        # 支持二进制数据（键盘输入）
+                        if isinstance(message, bytes):
+                            # 处理二进制终端输入
+                            input_data = message.decode('utf-8', errors='replace')
+                            await self.handle_pty_terminal_input(session_id, input_data)
+                        else:
+                            # 处理JSON消息
+                            data = json.loads(message)
+                            msg_type = data.get('type')
+                            
+                            if msg_type == 'terminal_input':
+                                # 处理终端输入
+                                input_data = data.get('data', '')
+                                await self.handle_pty_terminal_input(session_id, input_data)
+                            elif msg_type == 'terminal_resize':
+                                # 调整终端大小
+                                cols = data.get('cols', 80)
+                                rows = data.get('rows', 24)
+                                await self.handle_pty_terminal_resize(session_id, cols, rows)
+                            elif msg_type == 'terminal_ping':
+                                # 心跳保持
+                                self.terminal_manager.update_activity(session_id)
+                                pong_message = {
+                                    'type': 'terminal_pong',
+                                    'timestamp': datetime.now().isoformat()
+                                }
+                                await websocket.send(json.dumps(pong_message))
+                        
+                    except json.JSONDecodeError:
+                        logger.error(f"收到无效的JSON消息: {message}")
+                    except Exception as e:
+                        logger.error(f"处理PTY终端WebSocket消息失败: {e}")
+                        
+            except Exception as e:
+                logger.error(f"PTY终端WebSocket连接异常: {e}")
+            
+        except Exception as e:
+            logger.error(f"处理PTY终端WebSocket连接失败: {e}")
+        finally:
+            # 清理会话
+            if session_id:
+                await self.close_pty_terminal_session(session_id)
+                logger.info(f"PTY终端WebSocket连接已关闭: session_id={session_id}")
+
     async def handle_client(self, websocket, path):
         """处理客户端连接"""
         client_ip = websocket.remote_address[0]
-        logger.info(f"新连接: {websocket.remote_address}")
+        logger.info(f"新连接: {websocket.remote_address} path: '{path}' (type: {type(path)})")
+        
+        # 检查是否是终端WebSocket连接
+        if path and path.startswith('/terminal/'):
+            agent_id = path.split('/')[-1]  # 从路径中提取agent_id
+            logger.info(f"检测到终端WebSocket连接，agent_id: {agent_id}")
+            await self.handle_terminal_websocket(websocket, agent_id)
+            return
+        else:
+            logger.info(f"普通WebSocket连接，进入Agent消息处理流程")
         
         agent_id = None
         
@@ -223,9 +810,41 @@ class QunkongServer:
             async for message in websocket:
                 try:
                     data = json.loads(message)
+                    msg_type = data.get('type')
+                    
+                    # 检查是否是终端消息（路径解析失败的备用方案）
+                    if msg_type in ['terminal_input', 'terminal_resize', 'terminal_ping']:
+                        logger.info(f"检测到终端消息但路径为空，尝试从消息中获取agent信息")
+                        # 这是一个备用方案，尝试从其他地方获取agent_id
+                        # 暂时使用第一个在线agent进行测试
+                        online_agents = [aid for aid, agent in self.agents.items() if agent.status == 'ONLINE']
+                        if online_agents:
+                            target_agent_id = online_agents[0]  # 使用第一个在线agent
+                            logger.info(f"使用在线Agent: {target_agent_id} 处理终端消息")
+                            
+                            if msg_type == 'terminal_input':
+                                # 获取或创建终端会话
+                                session_id = f"emergency_session_{target_agent_id}"
+                                if not self.terminal_manager.get_session(session_id):
+                                    # 创建临时会话
+                                    temp_session_id = await self.create_pty_terminal_session(target_agent_id, "admin", websocket)
+                                    if temp_session_id:
+                                        session_id = temp_session_id
+                                
+                                input_data = data.get('data', '')
+                                await self.handle_pty_terminal_input(session_id, input_data)
+                                continue
+                                
+                            elif msg_type == 'terminal_resize':
+                                # 类似处理resize
+                                cols = data.get('cols', 80)
+                                rows = data.get('rows', 24)
+                                session_id = f"emergency_session_{target_agent_id}"
+                                await self.handle_pty_terminal_resize(session_id, cols, rows)
+                                continue
                     
                     # 如果是注册消息，记录agent_id
-                    if data.get('type') == 'register':
+                    if msg_type == 'register':
                         agent_id = data.get('agent_id') or data.get('id')
                         if not agent_id:
                             agent_id = generate_agent_id(data.get('ip', client_ip))
@@ -321,6 +940,21 @@ class QunkongServer:
             except Exception as e:
                 logger.error(f"检查心跳时出错: {e}")
                 await asyncio.sleep(5)
+
+    async def cleanup_terminal_sessions(self):
+        """定期清理过期的终端会话"""
+        while self.running:
+            try:
+                expired_count = self.terminal_manager.cleanup_expired_sessions()
+                if expired_count > 0:
+                    logger.info(f"清理了 {expired_count} 个过期的终端会话")
+                
+                # 每60秒检查一次
+                await asyncio.sleep(60)
+                
+            except Exception as e:
+                logger.error(f"清理终端会话时出错: {e}")
+                await asyncio.sleep(60)
 
     def create_task(self, script: str, target_hosts: List[str], **kwargs) -> str:
         """创建任务"""
@@ -427,15 +1061,19 @@ class QunkongServer:
         self.heartbeat_check_task = asyncio.create_task(self.check_agent_heartbeats())
         logger.info("心跳检查任务已启动")
         
+        # 启动会话清理任务
+        self.session_cleanup_task = asyncio.create_task(self.cleanup_terminal_sessions())
+        logger.info("终端会话清理任务已启动")
+        
         # 创建包装函数来处理path参数
-        async def websocket_handler(websocket, path=""):
+        async def websocket_handler(websocket, path):
             await self.handle_client(websocket, path)
         
         try:
             async with websockets.serve(websocket_handler, self.host, self.port):
                 await asyncio.Future()  # 保持运行
         finally:
-            # 服务器关闭时取消心跳检查任务
+            # 服务器关闭时取消任务
             if self.heartbeat_check_task:
                 self.heartbeat_check_task.cancel()
                 try:
@@ -443,3 +1081,11 @@ class QunkongServer:
                 except asyncio.CancelledError:
                     pass
                 logger.info("心跳检查任务已停止")
+            
+            if self.session_cleanup_task:
+                self.session_cleanup_task.cancel()
+                try:
+                    await self.session_cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("终端会话清理任务已停止")

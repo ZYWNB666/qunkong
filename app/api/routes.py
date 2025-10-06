@@ -402,3 +402,104 @@ def restart_host(agent_id):
     
     except Exception as e:
         return jsonify({'error': f'重启主机失败: {str(e)}'}), 500
+
+@api_bp.route('/agents/<agent_id>/terminal', methods=['POST'])
+def create_terminal_session(agent_id):
+    """创建终端会话"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        # 检查Agent是否在线
+        if agent_id not in server_instance.agents:
+            return jsonify({'error': 'Agent not found'}), 404
+        
+        agent = server_instance.agents[agent_id]
+        if agent.status != 'ONLINE':
+            return jsonify({'error': 'Agent is not online'}), 400
+        
+        # 创建终端会话（WebSocket连接将在前端建立）
+        return jsonify({
+            'agent_id': agent_id,
+            'websocket_url': f'ws://localhost:{server_instance.port}/terminal/{agent_id}',
+            'message': 'Terminal session can be created'
+        })
+    
+    except Exception as e:
+        return jsonify({'error': f'创建终端会话失败: {str(e)}'}), 500
+
+@api_bp.route('/terminal/sessions', methods=['GET'])
+def get_terminal_sessions():
+    """获取当前活跃的终端会话"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        sessions = []
+        for session_id, session in server_instance.terminal_manager.sessions.items():
+            session_info = {
+                'session_id': session_id,
+                'agent_id': session.agent_id,
+                'user_id': session.user_id,
+                'created_at': session.created_at,
+                'last_activity': session.last_activity,
+                'is_active': session.is_active,
+                'command_count': len(session.command_history)
+            }
+            sessions.append(session_info)
+        
+        return jsonify(sessions)
+    
+    except Exception as e:
+        return jsonify({'error': f'获取终端会话失败: {str(e)}'}), 500
+
+@api_bp.route('/terminal/sessions/<session_id>', methods=['DELETE'])
+def close_terminal_session_api(session_id):
+    """关闭指定的终端会话"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        session = server_instance.terminal_manager.get_session(session_id)
+        if not session:
+            return jsonify({'error': 'Terminal session not found'}), 404
+        
+        # 异步关闭会话
+        import asyncio
+        import threading
+        
+        def close_session():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def close_task():
+                await server_instance.close_terminal_session(session_id)
+            
+            loop.run_until_complete(close_task())
+            loop.close()
+        
+        thread = threading.Thread(target=close_session)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'message': 'Terminal session closed successfully'})
+    
+    except Exception as e:
+        return jsonify({'error': f'关闭终端会话失败: {str(e)}'}), 500
+
+@api_bp.route('/terminal/commands/allowed', methods=['GET'])
+def get_allowed_commands():
+    """获取允许的命令列表"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        return jsonify({
+            'allowed_commands': server_instance.terminal_manager.allowed_commands,
+            'forbidden_commands': server_instance.terminal_manager.forbidden_commands,
+            'session_timeout': server_instance.terminal_manager.session_timeout,
+            'max_sessions_per_agent': server_instance.terminal_manager.max_sessions_per_agent
+        })
+    
+    except Exception as e:
+        return jsonify({'error': f'获取命令配置失败: {str(e)}'}), 500

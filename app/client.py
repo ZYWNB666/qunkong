@@ -11,6 +11,18 @@ import hashlib
 import subprocess
 import os
 from datetime import datetime
+import pty
+import select
+import termios
+import struct
+import fcntl
+import signal
+import threading
+import time
+import sys
+import tempfile
+import secrets
+import queue
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +40,9 @@ class QunkongAgent:
         self.agent_id = agent_id or hashlib.md5(self.ip.encode('utf-8')).hexdigest()
         self.websocket = None
         self.running = False
+        # 终端会话管理 - PTY终端
+        self.terminal_sessions = {}  # session_id -> {'pty_fd': fd, 'process': process, 'thread': thread, 'output_queue': queue}
+        self.current_directory = os.path.expanduser("~")  # 当前工作目录
 
     def get_local_ip(self):
         """获取本地IP地址"""
@@ -670,6 +685,31 @@ class QunkongAgent:
                 # 重启主机
                 logger.info("收到重启主机命令")
                 await self.handle_restart_host()
+            elif msg_type == 'terminal_init':
+                # 初始化PTY终端
+                session_id = data.get('session_id')
+                cols = data.get('cols', 80)
+                rows = data.get('rows', 24)
+                logger.info(f"收到PTY终端初始化命令: {session_id} ({cols}x{rows})")
+                await self.handle_terminal_init(session_id, cols, rows)
+            elif msg_type == 'terminal_input':
+                # 处理终端输入
+                session_id = data.get('session_id')
+                input_data = data.get('data', '')
+                logger.debug(f"收到终端输入: {session_id}")
+                await self.handle_terminal_input(session_id, input_data)
+            elif msg_type == 'terminal_resize':
+                # 调整终端大小
+                session_id = data.get('session_id')
+                cols = data.get('cols', 80)
+                rows = data.get('rows', 24)
+                logger.info(f"收到调整终端大小命令: {session_id} ({cols}x{rows})")
+                await self.handle_terminal_resize(session_id, cols, rows)
+            elif msg_type == 'terminal_close':
+                # 关闭PTY终端
+                session_id = data.get('session_id')
+                logger.info(f"收到终端关闭命令: {session_id}")
+                await self.handle_terminal_close(session_id)
                 
         except Exception as e:
             logger.error("处理服务器消息失败: {}".format(e))
@@ -794,6 +834,294 @@ class QunkongAgent:
                 await self.websocket.send(json.dumps(error_response))
             except:
                 pass
+
+    async def handle_terminal_init(self, session_id: str, cols: int = 80, rows: int = 24):
+        """初始化PTY终端"""
+        try:
+            # 检查是否为Windows系统
+            if platform.system().lower() == 'windows':
+                await self.send_terminal_error(session_id, "PTY终端暂不支持Windows系统，请使用Linux或macOS")
+                return
+            
+            # 创建PTY
+            master_fd, slave_fd = pty.openpty()
+            
+            # 设置终端大小
+            self.set_terminal_size(master_fd, cols, rows)
+            
+            # 启动shell进程
+            shell = "/bin/bash"  # 可以改为 /bin/zsh 或其他shell
+            env = os.environ.copy()
+            env.update({
+                'TERM': 'xterm-256color',
+                'SHELL': shell,
+                'PS1': f'[\\u@{self.hostname} \\W]$ ',
+                'HOME': os.path.expanduser('~'),
+                'PATH': env.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
+            })
+            
+            # 使用subprocess.Popen而不是asyncio，因为PTY需要同步处理
+            process = subprocess.Popen(
+                [shell],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env=env,
+                cwd=self.current_directory,
+                preexec_fn=os.setsid
+            )
+            
+            # 关闭slave_fd，只保留master_fd
+            os.close(slave_fd)
+            
+            # 设置master_fd为非阻塞
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, os.O_NONBLOCK)
+            
+            # 创建输出队列
+            output_queue = queue.Queue()
+            
+            # 保存会话信息
+            self.terminal_sessions[session_id] = {
+                'master_fd': master_fd,
+                'process': process,
+                'thread': None,
+                'running': True,
+                'cols': cols,
+                'rows': rows,
+                'output_queue': output_queue
+            }
+            
+            # 启动读取PTY输出的线程
+            read_thread = threading.Thread(
+                target=self.pty_read_thread,
+                args=(session_id, master_fd, output_queue),
+                daemon=True
+            )
+            read_thread.start()
+            self.terminal_sessions[session_id]['thread'] = read_thread
+            
+            # 启动处理输出队列的异步任务
+            asyncio.create_task(self.process_pty_output_queue(session_id))
+            
+            # 发送初始化成功消息
+            ready_response = {
+                'type': 'terminal_ready',
+                'session_id': session_id,
+                'cols': cols,
+                'rows': rows
+            }
+            await self.websocket.send(json.dumps(ready_response))
+            
+            logger.info(f"PTY终端 {session_id} 初始化成功 ({cols}x{rows})")
+            
+        except Exception as e:
+            logger.error(f"PTY终端初始化失败: {e}")
+            await self.send_terminal_error(session_id, f"终端初始化失败: {str(e)}")
+    
+    def set_terminal_size(self, fd, cols, rows):
+        """设置终端大小"""
+        try:
+            size = struct.pack('HHHH', rows, cols, 0, 0)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
+        except Exception as e:
+            logger.warning(f"设置终端大小失败: {e}")
+    
+    def pty_read_thread(self, session_id, master_fd, output_queue):
+        """PTY读取线程 - 将PTY输出放入队列"""
+        try:
+            while session_id in self.terminal_sessions and self.terminal_sessions[session_id]['running']:
+                try:
+                    # 使用select检查是否有数据可读
+                    ready, _, _ = select.select([master_fd], [], [], 0.1)
+                    if not ready:
+                        continue
+                    
+                    # 读取数据
+                    data = os.read(master_fd, 1024)
+                    if not data:
+                        break
+                    
+                    # 转换为字符串
+                    output = data.decode('utf-8', errors='replace')
+                    logger.debug(f"PTY输出 {session_id}: {repr(output)}")
+                    
+                    # 将数据放入队列
+                    try:
+                        output_queue.put_nowait(output)
+                    except queue.Full:
+                        logger.warning(f"PTY输出队列已满，丢弃数据: {session_id}")
+                    
+                except OSError:
+                    # PTY已关闭
+                    break
+                except Exception as e:
+                    logger.error(f"PTY读取错误: {e}")
+                    break
+        
+        except Exception as e:
+            logger.error(f"PTY读取线程异常: {e}")
+        finally:
+            # 标记会话结束
+            if session_id in self.terminal_sessions:
+                try:
+                    output_queue.put_nowait(None)  # 结束标记
+                except queue.Full:
+                    pass
+            logger.info(f"PTY读取线程结束: {session_id}")
+    
+    async def process_pty_output_queue(self, session_id):
+        """处理PTY输出队列 - 异步发送到WebSocket"""
+        try:
+            while session_id in self.terminal_sessions:
+                session = self.terminal_sessions[session_id]
+                if not session['running']:
+                    break
+                
+                output_queue = session['output_queue']
+                
+                try:
+                    # 从队列中获取数据（非阻塞）
+                    try:
+                        output = output_queue.get_nowait()
+                    except queue.Empty:
+                        # 队列为空，稍等一下
+                        await asyncio.sleep(0.01)
+                        continue
+                    
+                    # 检查是否为结束标记
+                    if output is None:
+                        break
+                    
+                    # 发送数据到WebSocket
+                    if self.websocket:
+                        response = {
+                            'type': 'terminal_data',
+                            'session_id': session_id,
+                            'data': output
+                        }
+                        try:
+                            await self.websocket.send(json.dumps(response))
+                        except Exception as e:
+                            logger.error(f"发送PTY数据失败: {e}")
+                            break
+                    
+                    # 标记任务完成
+                    output_queue.task_done()
+                    
+                except Exception as e:
+                    logger.error(f"处理PTY输出队列错误: {e}")
+                    await asyncio.sleep(0.1)
+        
+        except Exception as e:
+            logger.error(f"PTY输出队列处理异常: {e}")
+        finally:
+            # 清理会话
+            if session_id in self.terminal_sessions:
+                self.cleanup_terminal_session(session_id)
+            logger.info(f"PTY输出队列处理结束: {session_id}")
+    
+    async def handle_terminal_input(self, session_id: str, data: str):
+        """处理终端输入"""
+        if session_id not in self.terminal_sessions:
+            logger.warning(f"终端会话不存在: {session_id}")
+            return
+        
+        try:
+            session = self.terminal_sessions[session_id]
+            master_fd = session['master_fd']
+            
+            # 调试日志
+            logger.info(f"收到终端输入 {session_id}: {repr(data)}")
+            
+            # 将输入写入PTY
+            bytes_written = os.write(master_fd, data.encode('utf-8'))
+            logger.info(f"写入PTY字节数: {bytes_written}")
+            
+        except Exception as e:
+            logger.error(f"处理终端输入失败: {e}")
+            await self.send_terminal_error(session_id, f"输入处理失败: {str(e)}")
+    
+    async def handle_terminal_resize(self, session_id: str, cols: int, rows: int):
+        """调整终端大小"""
+        if session_id not in self.terminal_sessions:
+            logger.warning(f"终端会话不存在: {session_id}")
+            return
+        
+        try:
+            session = self.terminal_sessions[session_id]
+            master_fd = session['master_fd']
+            
+            # 更新终端大小
+            self.set_terminal_size(master_fd, cols, rows)
+            session['cols'] = cols
+            session['rows'] = rows
+            
+            logger.info(f"终端 {session_id} 大小调整为 {cols}x{rows}")
+            
+        except Exception as e:
+            logger.error(f"调整终端大小失败: {e}")
+    
+    async def handle_terminal_close(self, session_id: str):
+        """关闭PTY终端"""
+        try:
+            if session_id in self.terminal_sessions:
+                self.cleanup_terminal_session(session_id)
+                logger.info(f"PTY终端 {session_id} 已关闭")
+            
+        except Exception as e:
+            logger.error(f"关闭PTY终端失败: {e}")
+    
+    def cleanup_terminal_session(self, session_id: str):
+        """清理终端会话"""
+        try:
+            if session_id not in self.terminal_sessions:
+                return
+            
+            session = self.terminal_sessions[session_id]
+            session['running'] = False
+            
+            # 关闭PTY
+            if 'master_fd' in session:
+                try:
+                    os.close(session['master_fd'])
+                except:
+                    pass
+            
+            # 终止进程
+            if 'process' in session and session['process']:
+                try:
+                    session['process'].terminate()
+                    session['process'].wait(timeout=2)
+                except:
+                    try:
+                        session['process'].kill()
+                    except:
+                        pass
+            
+            # 等待线程结束
+            if 'thread' in session and session['thread']:
+                try:
+                    session['thread'].join(timeout=1)
+                except:
+                    pass
+            
+            # 删除会话
+            del self.terminal_sessions[session_id]
+            
+        except Exception as e:
+            logger.error(f"清理终端会话失败: {e}")
+    
+    async def send_terminal_error(self, session_id: str, error_msg: str):
+        """发送终端错误消息"""
+        try:
+            response = {
+                'type': 'terminal_error',
+                'session_id': session_id,
+                'error': error_msg
+            }
+            await self.websocket.send(json.dumps(response))
+        except Exception as e:
+            logger.error(f"发送终端错误消息失败: {e}")
 
     async def run(self):
         """运行Agent"""

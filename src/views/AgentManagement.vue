@@ -121,11 +121,20 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button type="text" @click="viewAgentDetails(row)">
               <el-icon><View /></el-icon>
               详情
+            </el-button>
+            <el-button 
+              type="text" 
+              @click="openTerminal(row)"
+              :disabled="row.status !== 'ONLINE'"
+              style="color: #67c23a"
+            >
+              <el-icon><Monitor /></el-icon>
+              终端
             </el-button>
             <el-button type="text" @click="showRestartDialog(row)">
               <el-icon><RefreshRight /></el-icon>
@@ -509,14 +518,119 @@
         <el-button type="primary" @click="confirmRestart">确认重启</el-button>
       </template>
     </el-dialog>
+
+    <!-- 终端对话框 -->
+    <el-dialog
+      v-model="showTerminalDialog"
+      :title="`安全终端 - ${currentTerminalAgent?.hostname || 'Unknown'}`"
+      width="80%"
+      height="70vh"
+      :close-on-click-modal="false"
+      @close="closeTerminal"
+      class="terminal-dialog"
+    >
+      <div v-if="currentTerminalAgent" class="terminal-container" ref="terminalContainer">
+        <!-- 终端状态栏 -->
+        <div class="terminal-header">
+          <div class="terminal-info">
+            <el-tag :type="getTerminalStatusType()" size="small">
+              <el-icon><Monitor /></el-icon>
+              {{ getTerminalStatusText() }}
+            </el-tag>
+            <span class="agent-info">
+              📍 {{ currentTerminalAgent.hostname }} ({{ currentTerminalAgent.ip }})
+            </span>
+          </div>
+          <div class="terminal-actions">
+            <el-button size="small" @click="clearTerminal" :disabled="terminalStatus !== 'connected'">
+              <el-icon><Delete /></el-icon>
+              清屏
+            </el-button>
+            <el-button size="small" type="info" @click="showCommandHelp = !showCommandHelp">
+              <el-icon><QuestionFilled /></el-icon>
+              帮助
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 命令帮助 -->
+        <el-collapse-transition>
+          <div v-show="showCommandHelp" class="command-help">
+            <el-alert
+              title="🔒 安全终端使用说明"
+              type="info"
+              :closable="false"
+            >
+              <template #default>
+                <p><strong>基本操作：</strong></p>
+                <ul>
+                  <li>• 按 <kbd>Enter</kbd> 执行命令</li>
+                  <li>• 按 <kbd>↑</kbd>/<kbd>↓</kbd> 浏览历史命令</li>
+                  <li>• 输入 <code>exit</code> 或 <code>quit</code> 退出终端</li>
+                </ul>
+                <p><strong>安全限制：</strong></p>
+                <ul>
+                  <li>• 仅允许执行白名单中的安全命令</li>
+                  <li>• 禁止执行危险的系统操作（如删除、格式化等）</li>
+                  <li>• 命令执行超时限制为30秒</li>
+                  <li>• 所有操作都会被记录和审计</li>
+                </ul>
+              </template>
+            </el-alert>
+          </div>
+        </el-collapse-transition>
+
+        <!-- xterm.js 终端容器 -->
+        <div 
+          v-if="terminalStatus === 'connected'"
+          class="xterm-container" 
+          ref="terminalContainer"
+        ></div>
+
+        <!-- 连接状态提示 -->
+        <div v-else class="terminal-status-message">
+          <el-empty
+            :image-size="80"
+            :description="getTerminalStatusText()"
+          >
+            <template #image>
+              <el-icon size="80" :color="terminalStatus === 'error' ? '#f56c6c' : '#409eff'">
+                <Monitor />
+              </el-icon>
+            </template>
+            <el-button
+              v-if="terminalStatus === 'error' || terminalStatus === 'disconnected'"
+              type="primary"
+              @click="connectTerminalWebSocket(currentTerminalAgent.id)"
+            >
+              重新连接
+            </el-button>
+          </el-empty>
+        </div>
+      </div>
+      
+      <template #footer>
+        <div class="terminal-footer">
+          <span class="terminal-tips">
+            <el-icon><InfoFilled /></el-icon>
+            提示: 使用 ↑/↓ 键浏览命令历史，Ctrl+C 中断当前操作
+          </span>
+          <el-button @click="closeTerminal">关闭终端</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, scriptApi } from '../api'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 
 export default {
   name: 'AgentManagement',
@@ -537,6 +651,20 @@ export default {
     const restartType = ref('agent')
     const refreshTimer = ref(null)
     const refreshInterval = ref(5000) // 默认5秒刷新
+    
+    // 终端相关状态 - xterm.js
+    const showTerminalDialog = ref(false)
+    const currentTerminalAgent = ref(null)
+    const terminalStatus = ref('disconnected') // 'disconnected', 'connecting', 'connected', 'error'
+    const currentSessionId = ref(null)
+    const terminalWebSocket = ref(null)
+    const showCommandHelp = ref(false)
+    const terminalContainer = ref(null)
+    
+    // xterm.js 相关
+    const terminal = ref(null)
+    const fitAddon = ref(null)
+    const webLinksAddon = ref(null)
 
     const filters = reactive({
       keyword: '',
@@ -980,6 +1108,261 @@ export default {
       if (usage < 90) return '#e6a23c'  // 橙色
       return '#f56c6c'  // 红色
     }
+    
+    // 终端相关方法
+    const openTerminal = async (agent) => {
+      if (agent.status !== 'ONLINE') {
+        ElMessage.warning('Agent不在线，无法打开终端')
+        return
+      }
+      
+      currentTerminalAgent.value = agent
+      showTerminalDialog.value = true
+      terminalStatus.value = 'connecting'
+      
+      // 延迟等待对话框完全打开
+      await nextTick()
+      await new Promise(resolve => setTimeout(resolve, 300))
+      
+      // 初始化xterm.js终端
+      initializeTerminal()
+      
+      // 建立WebSocket连接
+      connectTerminalWebSocket(agent.id)
+    }
+    
+    const initializeTerminal = () => {
+      try {
+        // 清理已有的终端
+        if (terminal.value) {
+          terminal.value.dispose()
+        }
+        
+        // 创建新的终端实例
+        terminal.value = new Terminal({
+          theme: {
+            background: '#1e1e1e',
+            foreground: '#d4d4d4',
+            cursor: '#d4d4d4',
+            selection: '#264F78',
+            black: '#000000',
+            red: '#cd3131',
+            green: '#0dbc79',
+            yellow: '#e5e510',
+            blue: '#2472c8',
+            magenta: '#bc3fbc',
+            cyan: '#11a8cd',
+            white: '#e5e5e5',
+            brightBlack: '#666666',
+            brightRed: '#f14c4c',
+            brightGreen: '#23d18b',
+            brightYellow: '#f5f543',
+            brightBlue: '#3b8eea',
+            brightMagenta: '#d670d6',
+            brightCyan: '#29b8db',
+            brightWhite: '#e5e5e5'
+          },
+          fontSize: 14,
+          fontFamily: 'Consolas, "Courier New", monospace',
+          cursorBlink: true,
+          convertEol: true,
+          scrollback: 1000,
+          tabStopWidth: 4
+        })
+        
+        // 创建并加载插件
+        fitAddon.value = new FitAddon()
+        webLinksAddon.value = new WebLinksAddon()
+        
+        terminal.value.loadAddon(fitAddon.value)
+        terminal.value.loadAddon(webLinksAddon.value)
+        
+        // 将终端挂载到DOM元素
+        terminal.value.open(terminalContainer.value)
+        
+        // 调整终端大小以适应容器
+        fitAddon.value.fit()
+        
+        // 监听窗口大小变化
+        window.addEventListener('resize', handleTerminalResize)
+        
+        // 监听终端输入
+        terminal.value.onData((data) => {
+          if (terminalWebSocket.value && terminalWebSocket.value.readyState === WebSocket.OPEN) {
+            const message = {
+              type: 'terminal_input',
+              data: data
+            }
+            terminalWebSocket.value.send(JSON.stringify(message))
+          }
+        })
+        
+        console.log('xterm.js终端初始化成功')
+        
+      } catch (error) {
+        console.error('初始化终端失败:', error)
+        ElMessage.error('终端初始化失败')
+        terminalStatus.value = 'error'
+      }
+    }
+    
+    const handleTerminalResize = () => {
+      if (fitAddon.value && terminal.value) {
+        try {
+          fitAddon.value.fit()
+          // 发送终端大小变化消息
+          if (terminalWebSocket.value && terminalWebSocket.value.readyState === WebSocket.OPEN) {
+            const message = {
+              type: 'terminal_resize',
+              cols: terminal.value.cols,
+              rows: terminal.value.rows
+            }
+            terminalWebSocket.value.send(JSON.stringify(message))
+          }
+        } catch (error) {
+          console.error('调整终端大小失败:', error)
+        }
+      }
+    }
+    
+    const connectTerminalWebSocket = (agentId) => {
+      try {
+        const wsUrl = `ws://localhost:8765/terminal/${agentId}`
+        console.log('连接PTY终端WebSocket:', wsUrl)
+        
+        terminalWebSocket.value = new WebSocket(wsUrl)
+        
+        terminalWebSocket.value.onopen = () => {
+          console.log('PTY终端WebSocket连接已建立')
+          terminalStatus.value = 'connected'
+          ElMessage.success('终端连接成功')
+          
+          // 后端会自动处理初始化，前端只需要等待 terminal_ready 消息
+        }
+        
+        terminalWebSocket.value.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            handleTerminalMessage(data)
+          } catch (error) {
+            console.error('解析终端消息失败:', error)
+            // 如果不是JSON，可能是二进制数据
+            if (terminal.value) {
+              terminal.value.write(event.data)
+            }
+          }
+        }
+        
+        terminalWebSocket.value.onclose = () => {
+          console.log('PTY终端WebSocket连接已关闭')
+          terminalStatus.value = 'disconnected'
+          if (showTerminalDialog.value) {
+            ElMessage.warning('终端连接已断开')
+          }
+        }
+        
+        terminalWebSocket.value.onerror = (error) => {
+          console.error('PTY终端WebSocket连接错误:', error)
+          terminalStatus.value = 'error'
+          ElMessage.error('终端连接失败')
+        }
+        
+      } catch (error) {
+        console.error('建立PTY终端WebSocket连接失败:', error)
+        terminalStatus.value = 'error'
+        ElMessage.error('无法建立终端连接')
+      }
+    }
+    
+    const handleTerminalMessage = (data) => {
+      switch (data.type) {
+        case 'terminal_ready':
+          console.log('终端就绪:', data)
+          currentSessionId.value = data.session_id
+          
+          // 发送当前终端大小
+          if (terminal.value && terminalWebSocket.value && terminalWebSocket.value.readyState === WebSocket.OPEN) {
+            const resizeMessage = {
+              type: 'terminal_resize',
+              cols: terminal.value.cols,
+              rows: terminal.value.rows
+            }
+            terminalWebSocket.value.send(JSON.stringify(resizeMessage))
+          }
+          break
+        case 'terminal_data':
+          // 将数据写入xterm.js终端
+          if (terminal.value && data.data) {
+            terminal.value.write(data.data)
+          }
+          break
+        case 'terminal_error':
+          console.error('终端错误:', data.error)
+          if (terminal.value) {
+            terminal.value.write(`\r\n\x1b[31m❌ ${data.error}\x1b[0m\r\n`)
+          }
+          ElMessage.error(data.error)
+          break
+        case 'terminal_pong':
+          // 心跳响应，不需要特殊处理
+          break
+        default:
+          console.log('收到未知终端消息:', data)
+      }
+    }
+    
+    const clearTerminal = () => {
+      if (terminal.value) {
+        terminal.value.clear()
+      }
+    }
+    
+    const closeTerminal = () => {
+      // 清理事件监听器
+      window.removeEventListener('resize', handleTerminalResize)
+      
+      // 关闭WebSocket连接
+      if (terminalWebSocket.value) {
+        terminalWebSocket.value.close()
+        terminalWebSocket.value = null
+      }
+      
+      // 清理xterm.js实例
+      if (terminal.value) {
+        terminal.value.dispose()
+        terminal.value = null
+      }
+      
+      // 清理插件
+      fitAddon.value = null
+      webLinksAddon.value = null
+      
+      // 重置状态
+      showTerminalDialog.value = false
+      currentTerminalAgent.value = null
+      terminalStatus.value = 'disconnected'
+      currentSessionId.value = null
+    }
+    
+    const getTerminalStatusText = () => {
+      switch (terminalStatus.value) {
+        case 'connecting': return '连接中...'
+        case 'connected': return '已连接'
+        case 'disconnected': return '已断开'
+        case 'error': return '连接错误'
+        default: return '未知状态'
+      }
+    }
+    
+    const getTerminalStatusType = () => {
+      switch (terminalStatus.value) {
+        case 'connecting': return 'warning'
+        case 'connected': return 'success'
+        case 'disconnected': return 'info'
+        case 'error': return 'danger'
+        default: return 'info'
+      }
+    }
 
     onMounted(() => {
       loadUserPreferences()
@@ -1035,7 +1418,22 @@ export default {
       handleRefreshIntervalChange,
       getCpuColor,
       getMemoryColor,
-      getDiskColor
+      getDiskColor,
+      // 终端相关
+      showTerminalDialog,
+      currentTerminalAgent,
+      terminalStatus,
+      showCommandHelp,
+      terminalContainer,
+      openTerminal,
+      clearTerminal,
+      closeTerminal,
+      getTerminalStatusText,
+      getTerminalStatusType,
+      // xterm.js相关
+      terminal,
+      fitAddon,
+      webLinksAddon
     }
   }
 }
@@ -1312,5 +1710,195 @@ export default {
   font-size: 13px;
   color: #909399;
   line-height: 1.4;
+}
+
+/* 终端样式 */
+.terminal-dialog {
+  --terminal-bg: #1e1e1e;
+  --terminal-text: #d4d4d4;
+  --terminal-border: #333;
+  --terminal-error: #f85552;
+  --terminal-success: #16a085;
+  --terminal-warning: #f39c12;
+}
+
+.terminal-dialog .el-dialog__body {
+  padding: 0;
+  height: calc(70vh - 120px);
+  overflow: hidden;
+}
+
+.terminal-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #2d2d30;
+  border-bottom: 1px solid var(--terminal-border);
+  flex-shrink: 0;
+}
+
+.terminal-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-info {
+  font-size: 13px;
+  color: #cccccc;
+}
+
+.terminal-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.command-help {
+  background: #252526;
+  padding: 16px;
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.command-help .el-alert {
+  background: rgba(24, 144, 255, 0.1);
+  border: 1px solid rgba(24, 144, 255, 0.2);
+}
+
+.command-help p {
+  margin: 8px 0;
+  color: var(--terminal-text);
+}
+
+.command-help ul {
+  margin: 8px 0;
+  padding-left: 20px;
+  color: var(--terminal-text);
+}
+
+.command-help li {
+  margin: 4px 0;
+}
+
+.command-help kbd {
+  background: #3c3c3c;
+  color: #ffffff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  border: 1px solid #666;
+}
+
+.command-help code {
+  background: #3c3c3c;
+  color: #ce9178;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* xterm.js 终端容器 */
+.xterm-container {
+  flex: 1;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  padding: 8px;
+  height: 500px; /* 设置固定高度 */
+}
+
+/* 确保xterm.js终端的样式正确 */
+.xterm-container .xterm {
+  height: 100% !important;
+}
+
+.xterm-container .xterm-viewport {
+  background-color: var(--terminal-bg) !important;
+}
+
+/* 保留连接状态的样式 */
+.terminal-content.connecting {
+  color: var(--terminal-warning);
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0.3; }
+}
+
+
+.terminal-status-message {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--terminal-bg);
+}
+
+.terminal-status-message .el-empty__description {
+  color: var(--terminal-text);
+}
+
+.terminal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+}
+
+.terminal-tips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #666;
+}
+
+/* 滚动条样式 */
+.terminal-output::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-output::-webkit-scrollbar-track {
+  background: #2d2d30;
+}
+
+.terminal-output::-webkit-scrollbar-thumb {
+  background: #424245;
+  border-radius: 4px;
+}
+
+.terminal-output::-webkit-scrollbar-thumb:hover {
+  background: #4c4c4c;
+}
+
+/* 响应式适配 */
+@media (max-width: 768px) {
+  .terminal-dialog {
+    width: 95% !important;
+  }
+  
+  .terminal-header {
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+  
+  .terminal-info {
+    justify-content: center;
+  }
+  
+  .terminal-actions {
+    justify-content: center;
+  }
 }
 </style>
