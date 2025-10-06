@@ -1,7 +1,7 @@
 {
-  "name": "queenbee-frontend",
+  "name": "qunkong-frontend",
   "version": "1.0.0",
-  "description": "QueenBee 前端管理系统",
+  "description": "Qunkong 前端管理系统",
   "scripts": {
     "dev": "cross-env NODE_NO_WARNINGS=1 vite",
     "build": "vite build",

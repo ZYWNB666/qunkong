@@ -1,4 +1,4 @@
-# QueenBee 项目容器化部署指南
+# Qunkong 项目容器化部署指南
 
 ## 概述
 
@@ -196,7 +196,7 @@ docker volume prune
 [mysql]
 host = localhost          # MySQL服务器地址
 port = 3306              # MySQL服务器端口
-database = queenbee      # 数据库名称
+database = qunkong      # 数据库名称
 username = your_username # 数据库用户名
 password = your_password # 数据库密码
 charset = utf8mb4        # 字符集

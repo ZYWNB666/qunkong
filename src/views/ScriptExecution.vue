@@ -368,7 +368,7 @@ def job_fail(msg=""):
 if __name__ == "__main__":
     job_start()
     # 在这里编写你的Python脚本逻辑
-    print("Hello, QueenBee!")
+    print("Hello, Qunkong!")
     job_success("脚本执行完成")`
 
     const scriptPlaceholder = computed(() => (form.script_type === 'shell' ? shellPlaceholder : pythonPlaceholder))

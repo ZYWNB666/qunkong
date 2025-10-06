@@ -1,12 +1,12 @@
 """
-QueenBee 主服务器入口
+Qunkong 主服务器入口
 """
 import asyncio
 import threading
 from flask import Flask, render_template
 from app import create_app
 from app.api.routes import init_api
-from app.server_core import QueenBeeServer
+from app.server_core import QunkongServer
 
 def create_flask_app():
     """创建Flask应用"""
@@ -27,7 +27,7 @@ def start_websocket_server(server):
 def main():
     """主函数"""
     # 创建WebSocket服务器
-    websocket_server = QueenBeeServer(host="0.0.0.0", port=8765, web_port=5000)
+    websocket_server = QunkongServer(host="0.0.0.0", port=8765, web_port=5000)
     
     # 创建Flask应用
     flask_app = create_flask_app()
@@ -42,7 +42,7 @@ def main():
     
     # 启动Flask应用
     print("Web 服务器启动在 http://0.0.0.0:5000")
-    print("QueenBee 服务器启动在 ws://0.0.0.0:8765")
+    print("Qunkong 服务器启动在 ws://0.0.0.0:8765")
     flask_app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == '__main__':

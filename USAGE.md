@@ -1,8 +1,8 @@
-# QueenBee 运维管理平台使用说明
+# Qunkong 运维管理平台使用说明
 
 ## 项目概述
 
-QueenBee是一个基于Vue 3 + Element Plus的现代化运维管理平台，提供脚本执行、执行历史和Agent管理功能。前端采用现代化的UI设计，完全参考了 https://queenbee.gre.garenanow.com/93/execute/script 的设计风格。
+Qunkong是一个基于Vue 3 + Element Plus的现代化运维管理平台，提供脚本执行、执行历史和Agent管理功能。前端采用现代化的UI设计，完全参考了 https://queenbee.gre.garenanow.com/93/execute/script 的设计风格。
 
 ## 功能模块
 
@@ -215,7 +215,7 @@ echo "参数3: $3"
 
 ### 项目结构
 ```
-queenbee-frontend/
+qunkong-frontend/
 ├── public/                 # 静态资源
 ├── src/
 │   ├── api/               # API接口

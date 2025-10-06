@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QueenBee 后端服务启动脚本
+Qunkong 后端服务启动脚本
 """
 import sys
 import os
@@ -89,7 +89,7 @@ def test_database_connection():
 
 def start_backend():
     """启动后端服务"""
-    print("正在启动 QueenBee 后端服务...")
+    print("正在启动 Qunkong 后端服务...")
     print("Web服务地址: http://localhost:5000")
     print("WebSocket服务地址: ws://localhost:8765")
     print("按 Ctrl+C 停止服务")
@@ -117,7 +117,7 @@ def start_backend():
 
 def main():
     """主函数"""
-    print("QueenBee 后端服务启动器")
+    print("Qunkong 后端服务启动器")
     print("=" * 30)
     
     # 检查Python环境

@@ -492,7 +492,7 @@
           <el-radio value="agent" class="restart-option">
             <div class="option-content">
               <div class="option-title">重启Agent</div>
-              <div class="option-desc">仅重启QueenBee Agent服务，不影响主机运行</div>
+              <div class="option-desc">仅重启Qunkong Agent服务，不影响主机运行</div>
             </div>
           </el-radio>
           <el-radio value="host" class="restart-option">

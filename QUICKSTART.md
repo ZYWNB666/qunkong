@@ -1,4 +1,4 @@
-# QueenBee 快速启动指南
+# Qunkong 快速启动指南
 
 ## 🚀 一键启动
 
@@ -130,7 +130,7 @@ pip install flask websockets
 ### 数据库错误
 ```bash
 # 删除旧数据库
-rm queenbee.db
+rm qunkong.db
 
 # 重新生成数据
 python demo_data.py

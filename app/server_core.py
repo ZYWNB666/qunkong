@@ -1,5 +1,5 @@
 """
-QueenBee服务器核心模块
+Qunkong服务器核心模块
 """
 import asyncio
 import websockets
@@ -46,8 +46,8 @@ class Task:
         if self.results is None:
             self.results = {}
 
-class QueenBeeServer:
-    """QueenBee 服务端主类"""
+class QunkongServer:
+    """Qunkong 服务端主类"""
     
     def __init__(self, host="0.0.0.0", port=8765, web_port=5000):
         self.host = host
@@ -421,7 +421,7 @@ class QueenBeeServer:
     async def start(self):
         """启动服务器"""
         self.running = True
-        logger.info(f"QueenBee 服务器启动在 ws://{self.host}:{self.port}")
+        logger.info(f"Qunkong 服务器启动在 ws://{self.host}:{self.port}")
         
         # 启动心跳检查任务
         self.heartbeat_check_task = asyncio.create_task(self.check_agent_heartbeats())

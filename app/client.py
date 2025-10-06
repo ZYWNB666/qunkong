@@ -1,5 +1,5 @@
 """
-QueenBee Agent 客户端
+Qunkong Agent 客户端
 """
 import asyncio
 import websockets
@@ -16,8 +16,8 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class QueenBeeAgent:
-    """QueenBee Agent 客户端"""
+class QunkongAgent:
+    """Qunkong Agent 客户端"""
     
     def __init__(self, server_host="localhost", server_port=8765, agent_id=None):
         self.server_host = server_host
@@ -512,9 +512,9 @@ class QueenBeeAgent:
         try:
             # 生成临时文件名，使用task_id作为文件名的一部分
             if task_id:
-                temp_filename = "queenbee_script_{}.sh".format(task_id)
+                temp_filename = "qunkong_script_{}.sh".format(task_id)
             else:
-                temp_filename = "queenbee_script_{}.sh".format(int(time.time()))
+                temp_filename = "qunkong_script_{}.sh".format(int(time.time()))
             
             # 创建临时脚本文件
             temp_dir = tempfile.gettempdir()
@@ -763,7 +763,7 @@ class QueenBeeAgent:
             # 根据操作系统执行重启命令
             if system_type == 'windows':
                 # Windows重启命令
-                subprocess.run(['shutdown', '/r', '/t', '10', '/c', 'QueenBee Agent requested restart'], 
+                subprocess.run(['shutdown', '/r', '/t', '10', '/c', 'Qunkong Agent requested restart'], 
                              check=False)
             elif system_type in ['linux', 'darwin']:
                 # Linux/macOS重启命令
@@ -799,7 +799,7 @@ class QueenBeeAgent:
         """运行Agent"""
         self.running = True
         logger.info("Agent 初始化: {} ({})".format(self.hostname, self.ip))
-        logger.info("QueenBee Agent 启动: {}".format(self.hostname))
+        logger.info("Qunkong Agent 启动: {}".format(self.hostname))
         
         # 重连参数
         max_retries = 10
@@ -860,12 +860,12 @@ class QueenBeeAgent:
                                     return
                                 
                                 logger.info("准备开始心跳循环")
+                                logger.info("心跳循环进行中...")
                                 heartbeat_count = 0
                                 # 使用更简单的条件检查
                                 while self.running:
                                     heartbeat_count += 1
-                                    logger.info("=== 心跳循环 #{} 开始 ===".format(heartbeat_count))
-                                    
+                                    # logger.info("=== 心跳循环 #{} 开始 ===".format(heartbeat_count))
                                     # 检查连接状态
                                     try:
                                         if hasattr(websocket, 'closed') and websocket.closed:
@@ -964,7 +964,7 @@ def main():
     """主函数"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='QueenBee Agent 客户端')
+    parser = argparse.ArgumentParser(description='Qunkong Agent 客户端')
     parser.add_argument('--server', '-s', default='localhost', 
                        help='服务器地址 (默认: localhost)')
     parser.add_argument('--port', '-p', type=int, default=8765, 
@@ -981,7 +981,7 @@ def main():
     
     logger.info("启动参数: 服务器={}:{}".format(args.server, args.port))
     
-    agent = QueenBeeAgent(
+    agent = QunkongAgent(
         server_host=args.server,
         server_port=args.port,
         agent_id=args.agent_id

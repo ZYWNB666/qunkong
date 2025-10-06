@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# QueenBee 项目 Docker 启动脚本
+# Qunkong 项目 Docker 启动脚本
 
-echo "QueenBee 项目容器化启动"
+echo "Qunkong 项目容器化启动"
 echo "========================"
 
 # 检查 Docker 和 Docker Compose 是否安装

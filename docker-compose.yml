@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: queenbee-backend
+    container_name: qunkong-backend
     restart: unless-stopped
     ports:
       - "5000:5000"
@@ -26,7 +26,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: queenbee-frontend
+    container_name: qunkong-frontend
     restart: unless-stopped
     ports:
       - "3000:3000"

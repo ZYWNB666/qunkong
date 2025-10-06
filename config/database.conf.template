@@ -1,10 +1,10 @@
-# QueenBee 数据库配置文件模板
+# Qunkong 数据库配置文件模板
 # 复制此文件为 database.conf 并填写实际配置
 
 [mysql]
 host = localhost
 port = 3306
-database = queenbee
+database = qunkong
 username = your_username
 password = your_password
 charset = utf8mb4

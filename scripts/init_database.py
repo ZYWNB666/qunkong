@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QueenBee 数据库初始化脚本
+Qunkong 数据库初始化脚本
 """
 import os
 import sys
@@ -81,7 +81,7 @@ def init_database_tables():
 
 def main():
     """主函数"""
-    print("QueenBee 数据库初始化脚本")
+    print("Qunkong 数据库初始化脚本")
     print("=" * 40)
     
     # 1. 创建配置文件
@@ -112,7 +112,7 @@ def main():
     
     print("\n" + "=" * 40)
     print("数据库初始化完成！")
-    print("现在可以启动 QueenBee 服务了")
+    print("现在可以启动 Qunkong 服务了")
     return True
 
 if __name__ == "__main__":

@@ -234,7 +234,7 @@ dist
 *.db
 *.sqlite
 *.sqlite3
-queenbee.db
+qunkong.db
 
 # IDE files
 .vscode/

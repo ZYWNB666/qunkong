@@ -1,5 +1,5 @@
 """
-QueenBee应用主模块
+Qunkong应用主模块
 """
 from flask import Flask
 from app.api.routes import api_bp, init_api

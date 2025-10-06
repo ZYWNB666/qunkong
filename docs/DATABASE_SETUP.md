@@ -1,8 +1,8 @@
-# QueenBee 数据库配置指南
+# Qunkong 数据库配置指南
 
 ## 概述
 
-QueenBee 已从 SQLite 迁移到 MySQL，提供更好的性能和并发支持。
+Qunkong 已从 SQLite 迁移到 MySQL，提供更好的性能和并发支持。
 
 ## 前置要求
 
@@ -46,20 +46,20 @@ mysql -u root -p
 创建数据库和用户：
 ```sql
 -- 创建数据库
-CREATE DATABASE queenbee CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE qunkong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 创建用户（请替换为安全的密码）
-CREATE USER 'queenbee'@'localhost' IDENTIFIED BY 'your_secure_password';
+CREATE USER 'qunkong'@'localhost' IDENTIFIED BY 'your_secure_password';
 
 -- 授予权限
-GRANT ALL PRIVILEGES ON queenbee.* TO 'queenbee'@'localhost';
+GRANT ALL PRIVILEGES ON qunkong.* TO 'qunkong'@'localhost';
 FLUSH PRIVILEGES;
 
 -- 退出
 EXIT;
 ```
 
-### 3. 配置 QueenBee
+### 3. 配置 Qunkong
 
 #### 3.1 安装 Python 依赖
 ```bash
@@ -78,8 +78,8 @@ cp config/database.conf.template config/database.conf
 [mysql]
 host = localhost
 port = 3306
-database = queenbee
-username = queenbee
+database = qunkong
+username = qunkong
 password = your_secure_password
 charset = utf8mb4
 
@@ -112,7 +112,7 @@ python app/main.py
 |------|------|--------|
 | host | MySQL 服务器地址 | localhost |
 | port | MySQL 端口 | 3306 |
-| database | 数据库名称 | queenbee |
+| database | 数据库名称 | qunkong |
 | username | 数据库用户名 | - |
 | password | 数据库密码 | - |
 | charset | 字符集 | utf8mb4 |
@@ -176,8 +176,8 @@ python app/main.py
 # MySQL 错误日志
 sudo tail -f /var/log/mysql/error.log
 
-# QueenBee 应用日志
-tail -f logs/queenbee.log
+# Qunkong 应用日志
+tail -f logs/qunkong.log
 ```
 
 ## 性能优化
@@ -211,12 +211,12 @@ sudo systemctl restart mysql
 
 ### 备份数据库
 ```bash
-mysqldump -u queenbee -p queenbee > backup_$(date +%Y%m%d_%H%M%S).sql
+mysqldump -u qunkong -p qunkong > backup_$(date +%Y%m%d_%H%M%S).sql
 ```
 
 ### 恢复数据库
 ```bash
-mysql -u queenbee -p queenbee < backup_20231201_120000.sql
+mysql -u qunkong -p qunkong < backup_20231201_120000.sql
 ```
 
 ## 安全建议

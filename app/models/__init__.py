@@ -1,5 +1,5 @@
 """
-QueenBee 数据库模型
+Qunkong 数据库模型
 """
 import pymysql
 import hashlib

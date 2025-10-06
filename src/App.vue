@@ -5,8 +5,8 @@
       <el-header class="header">
         <div class="header-left">
           <div class="logo-container">
-            <img src="/logo.svg" alt="QueenBee" class="logo" />
-            <span class="title">QueenBee</span>
+            <img src="/logo.svg" alt="Qunkong" class="logo" />
+            <span class="title">Qunkong</span>
           </div>
         </div>
         <div class="header-center">
