@@ -1,6 +1,10 @@
 <template>
   <div id="app">
-    <el-container>
+    <!-- 登录页面不显示导航 -->
+    <router-view v-if="$route.path === '/login'" />
+    
+    <!-- 主应用布局 -->
+    <el-container v-else>
       <!-- 顶部导航栏 -->
       <el-header class="header">
         <div class="header-left">
@@ -12,7 +16,7 @@
         <div class="header-center">
           <el-input
             v-model="searchKeyword"
-            placeholder="AIGC"
+            placeholder="搜索功能..."
             class="search-input"
             size="small"
           >
@@ -22,16 +26,26 @@
           </el-input>
         </div>
         <div class="header-right">
-          <el-dropdown>
+          <el-dropdown @command="handleCommand">
             <span class="user-info">
               <el-icon><User /></el-icon>
-              admin@example.com
+              {{ currentUser?.username || currentUser?.email || '未登录' }}
               <el-icon><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item>个人设置</el-dropdown-item>
-                <el-dropdown-item>退出登录</el-dropdown-item>
+                <el-dropdown-item command="profile">
+                  <el-icon><User /></el-icon>
+                  个人设置
+                </el-dropdown-item>
+                <el-dropdown-item command="changePassword">
+                  <el-icon><Lock /></el-icon>
+                  修改密码
+                </el-dropdown-item>
+                <el-dropdown-item divided command="logout">
+                  <el-icon><SwitchButton /></el-icon>
+                  退出登录
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -133,15 +147,77 @@
 </template>
 
 <script>
-import { ref } from 'vue'
+import { ref, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { authApi } from './api'
 
 export default {
   name: 'App',
   setup() {
+    const router = useRouter()
+    const route = useRoute()
     const searchKeyword = ref('')
+    const currentUser = ref(null)
+    
+    // 加载用户信息
+    const loadUserInfo = () => {
+      const userStr = localStorage.getItem('qunkong_user')
+      if (userStr) {
+        try {
+          currentUser.value = JSON.parse(userStr)
+        } catch (error) {
+          console.error('解析用户信息失败:', error)
+        }
+      }
+    }
+    
+    // 处理下拉菜单命令
+    const handleCommand = async (command) => {
+      switch (command) {
+        case 'profile':
+          ElMessage.info('个人设置功能开发中...')
+          break
+        case 'changePassword':
+          ElMessage.info('修改密码功能开发中...')
+          break
+        case 'logout':
+          try {
+            await ElMessageBox.confirm('确定要退出登录吗？', '确认退出', {
+              type: 'warning',
+              confirmButtonText: '确定',
+              cancelButtonText: '取消'
+            })
+            
+            // 调用登出API
+            try {
+              await authApi.logout()
+            } catch (error) {
+              console.error('登出API调用失败:', error)
+            }
+            
+            // 清除本地存储
+            localStorage.removeItem('qunkong_token')
+            localStorage.removeItem('qunkong_user')
+            localStorage.removeItem('qunkong_remember')
+            
+            ElMessage.success('已退出登录')
+            router.push('/login')
+          } catch (error) {
+            // 用户取消
+          }
+          break
+      }
+    }
+    
+    onMounted(() => {
+      loadUserInfo()
+    })
     
     return {
-      searchKeyword
+      searchKeyword,
+      currentUser,
+      handleCommand
     }
   }
 }

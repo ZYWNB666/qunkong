@@ -70,6 +70,10 @@
               <el-icon><Delete /></el-icon>
               重置筛选
             </el-button>
+            <el-button type="danger" @click="quickDeleteDownAgents" plain>
+              <el-icon><Delete /></el-icon>
+              清理DOWN状态
+            </el-button>
           </el-col>
         </el-row>
       </div>
@@ -340,10 +344,20 @@
               <el-radio value="restart">重启服务</el-radio>
               <el-radio value="update">更新版本</el-radio>
               <el-radio value="stop">停止服务</el-radio>
+              <el-radio value="delete_down">删除DOWN状态Agent</el-radio>
             </el-radio-group>
           </el-form-item>
           <el-form-item v-if="batchForm.action === 'update'" label="目标版本">
             <el-input v-model="batchForm.version" placeholder="请输入目标版本" />
+          </el-form-item>
+          <el-form-item v-if="batchForm.action === 'delete_down'">
+            <el-alert
+              title="警告"
+              type="warning"
+              description="此操作将永久删除所有选中的DOWN或OFFLINE状态的Agent，无法恢复！"
+              :closable="false"
+              show-icon
+            />
           </el-form-item>
         </el-form>
       </div>
@@ -986,18 +1000,114 @@ export default {
         return
       }
 
+      // 获取操作类型的中文描述
+      const actionTextMap = {
+        'restart': '重启服务',
+        'update': '更新版本',
+        'stop': '停止服务',
+        'delete_down': '删除DOWN状态Agent'
+      }
+      const actionText = actionTextMap[batchForm.action] || batchForm.action
+
       try {
+        // 特殊处理删除操作的确认提示
+        let confirmMessage = `确定要对 ${selectedAgents.value.length} 个Agent执行 ${actionText} 操作吗？`
+        if (batchForm.action === 'delete_down') {
+          confirmMessage = `确定要删除选中的 ${selectedAgents.value.length} 个Agent吗？\n\n⚠️ 此操作将永久删除所有DOWN或OFFLINE状态的Agent，无法恢复！`
+        }
+
         await ElMessageBox.confirm(
-          `确定要对 ${selectedAgents.value.length} 个Agent执行 ${batchForm.action} 操作吗？`,
+          confirmMessage,
           '确认批量操作',
-          { type: 'warning' }
+          { 
+            type: 'warning',
+            confirmButtonText: batchForm.action === 'delete_down' ? '确认删除' : '确认',
+            cancelButtonText: '取消'
+          }
         )
         
-        ElMessage.success('批量操作请求已发送')
+        // 调用批量管理API
+        const agentIds = selectedAgents.value.map(agent => agent.id)
+        const response = await agentApi.batchManageAgents({
+          action: batchForm.action,
+          agent_ids: agentIds,
+          version: batchForm.version
+        })
+        
+        // 显示操作结果
+        if (response.success_count > 0) {
+          ElMessage.success(`批量操作完成：成功 ${response.success_count}/${response.total_count}`)
+        } else {
+          ElMessage.warning(`批量操作完成：成功 ${response.success_count}/${response.total_count}`)
+        }
+        
+        // 显示详细结果
+        if (response.results && response.results.length > 0) {
+          const failedResults = response.results.filter(r => !r.success)
+          if (failedResults.length > 0) {
+            console.log('批量操作失败的Agent:', failedResults)
+          }
+        }
+        
         showBatchDialog.value = false
-        // 这里可以调用批量操作的API
+        
+        // 刷新Agent列表
+        setTimeout(() => {
+          refreshAgents()
+        }, 1000)
+        
       } catch (error) {
-        // 用户取消
+        if (error !== 'cancel' && error.message !== 'cancel') {
+          ElMessage.error('批量操作失败: ' + (error.response?.data?.error || error.message || '未知错误'))
+        }
+      }
+    }
+
+    const quickDeleteDownAgents = async () => {
+      try {
+        // 筛选出所有DOWN或OFFLINE状态的Agent
+        const downAgents = agents.value.filter(agent => 
+          agent.status === 'DOWN' || agent.status === 'OFFLINE'
+        )
+        
+        if (downAgents.length === 0) {
+          ElMessage.info('没有找到DOWN或OFFLINE状态的Agent')
+          return
+        }
+        
+        await ElMessageBox.confirm(
+          `检测到 ${downAgents.length} 个DOWN或OFFLINE状态的Agent，确定要全部删除吗？\n\n⚠️ 此操作将永久删除这些Agent，无法恢复！`,
+          '确认批量删除',
+          { 
+            type: 'warning',
+            confirmButtonText: '确认删除',
+            cancelButtonText: '取消'
+          }
+        )
+        
+        // 调用批量删除API
+        const agentIds = downAgents.map(agent => agent.id)
+        const response = await agentApi.batchManageAgents({
+          action: 'delete_down',
+          agent_ids: agentIds
+        })
+        
+        // 显示操作结果
+        if (response.success_count > 0) {
+          ElMessage.success(`成功删除 ${response.success_count} 个Agent`)
+        } else {
+          ElMessage.warning(`删除失败，请检查日志`)
+        }
+        
+        // 刷新Agent列表
+        setTimeout(() => {
+          refreshAgents()
+        }, 1000)
+        
+      } catch (error) {
+        if (error !== 'cancel' && error.message !== 'cancel') {
+          ElMessage.error('删除操作失败: ' + (error.response?.data?.error || error.message || '未知错误'))
+        }
       }
     }
 
@@ -1434,6 +1544,7 @@ export default {
       showRestartDialog,
       confirmRestart,
       executeBatchAction,
+      quickDeleteDownAgents,
       viewTaskResult,
       getStatusType,
       getStatusText,

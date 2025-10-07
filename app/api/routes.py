@@ -4,6 +4,7 @@ API路由定义
 import json
 from flask import Blueprint, jsonify, request
 from app.models import DatabaseManager
+from app.api.auth import require_auth, require_permission
 from dataclasses import asdict
 
 # 创建蓝图
@@ -18,6 +19,7 @@ def init_api(server):
     server_instance = server
 
 @api_bp.route('/tasks', methods=['GET'])
+@require_auth
 def get_tasks():
     """获取执行历史"""
     if server_instance:
@@ -55,6 +57,8 @@ def get_tasks():
     return jsonify([])
 
 @api_bp.route('/tasks', methods=['POST'])
+@require_auth
+@require_permission('script_execution')
 def create_task():
     """创建新任务"""
     if not server_instance:
@@ -158,6 +162,8 @@ def get_agent_details(agent_id):
     return jsonify(agent_info)
 
 @api_bp.route('/execute', methods=['POST'])
+@require_auth
+@require_permission('script_execution')
 def execute_script():
     """执行脚本"""
     if not server_instance:
@@ -312,6 +318,8 @@ def get_agent_tasks(agent_id):
         return jsonify({'error': f'获取Agent任务失败: {str(e)}'}), 500
 
 @api_bp.route('/agents/<agent_id>/restart', methods=['POST'])
+@require_auth
+@require_permission('agent_management')
 def restart_agent(agent_id):
     """重启Agent"""
     if not server_instance:
@@ -503,3 +511,224 @@ def get_allowed_commands():
     
     except Exception as e:
         return jsonify({'error': f'获取命令配置失败: {str(e)}'}), 500
+
+@api_bp.route('/agents/batch', methods=['POST'])
+@require_auth
+@require_permission('agent_management')
+def batch_manage_agents():
+    """批量管理Agent"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '请提供批量操作信息'}), 400
+        
+        action = data.get('action')
+        agent_ids = data.get('agent_ids', [])
+        
+        if not action:
+            return jsonify({'error': '请指定操作类型'}), 400
+        
+        if not agent_ids:
+            return jsonify({'error': '请选择要操作的Agent'}), 400
+        
+        results = []
+        
+        if action == 'delete_offline' or action == 'delete_down':
+            # 删除离线或DOWN状态的Agent
+            for agent_id in agent_ids:
+                try:
+                    # 检查Agent状态
+                    agent_status = None
+                    if agent_id in server_instance.agents:
+                        agent = server_instance.agents[agent_id]
+                        agent_status = agent.status
+                        
+                        # 检查状态是否允许删除
+                        if agent_status not in ['OFFLINE', 'DOWN']:
+                            results.append({
+                                'agent_id': agent_id,
+                                'success': False,
+                                'message': f'Agent状态为{agent_status}，只能删除OFFLINE或DOWN状态的Agent'
+                            })
+                            continue
+                        
+                        # 从内存中删除
+                        del server_instance.agents[agent_id]
+                    
+                    # 从数据库中删除
+                    conn = server_instance.db._get_connection()
+                    cursor = conn.cursor()
+                    
+                    # 删除Agent记录
+                    cursor.execute('DELETE FROM agents WHERE id = %s', (agent_id,))
+                    affected_rows = cursor.rowcount
+                    
+                    # 删除Agent系统信息
+                    cursor.execute('DELETE FROM agent_system_info WHERE agent_id = %s', (agent_id,))
+                    
+                    # 删除Agent相关的任务执行记录（可选，根据需求决定是否保留历史记录）
+                    # cursor.execute('DELETE FROM execution_history WHERE target_hosts LIKE %s', (f'%{agent_id}%',))
+                    
+                    conn.close()
+                    
+                    if affected_rows > 0:
+                        results.append({
+                            'agent_id': agent_id,
+                            'success': True,
+                            'message': 'Agent删除成功'
+                        })
+                    else:
+                        results.append({
+                            'agent_id': agent_id,
+                            'success': False,
+                            'message': 'Agent不存在'
+                        })
+                        
+                except Exception as e:
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': f'删除失败: {str(e)}'
+                    })
+        
+        elif action == 'restart':
+            # 批量重启Agent
+            import asyncio
+            import threading
+            
+            def batch_restart():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def restart_agents():
+                    for agent_id in agent_ids:
+                        try:
+                            if agent_id in server_instance.agents:
+                                agent = server_instance.agents[agent_id]
+                                if agent.status == 'ONLINE' and agent.websocket:
+                                    restart_message = {
+                                        'type': 'restart_agent',
+                                        'agent_id': agent_id,
+                                        'message': 'Batch restart requested'
+                                    }
+                                    await agent.websocket.send(json.dumps(restart_message))
+                                    results.append({
+                                        'agent_id': agent_id,
+                                        'success': True,
+                                        'message': '重启命令已发送'
+                                    })
+                                else:
+                                    results.append({
+                                        'agent_id': agent_id,
+                                        'success': False,
+                                        'message': 'Agent不在线'
+                                    })
+                            else:
+                                results.append({
+                                    'agent_id': agent_id,
+                                    'success': False,
+                                    'message': 'Agent不存在'
+                                })
+                        except Exception as e:
+                            results.append({
+                                'agent_id': agent_id,
+                                'success': False,
+                                'message': f'重启失败: {str(e)}'
+                            })
+                
+                loop.run_until_complete(restart_agents())
+                loop.close()
+            
+            thread = threading.Thread(target=batch_restart)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=10)  # 等待最多10秒
+        
+        elif action == 'update':
+            # 批量更新Agent版本
+            version = data.get('version', '')
+            if not version:
+                return jsonify({'error': '请指定目标版本'}), 400
+            
+            # 这里实现批量更新逻辑
+            for agent_id in agent_ids:
+                results.append({
+                    'agent_id': agent_id,
+                    'success': False,
+                    'message': '批量更新功能暂未实现'
+                })
+        
+        else:
+            return jsonify({'error': f'不支持的操作类型: {action}'}), 400
+        
+        success_count = sum(1 for r in results if r['success'])
+        total_count = len(results)
+        
+        return jsonify({
+            'message': f'批量操作完成，成功: {success_count}/{total_count}',
+            'results': results,
+            'success_count': success_count,
+            'total_count': total_count
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'批量管理失败: {str(e)}'}), 500
+
+@api_bp.route('/agents/cleanup', methods=['POST'])
+@require_auth
+@require_permission('agent_management')
+def cleanup_offline_agents():
+    """清理离线Agent"""
+    if not server_instance:
+        return jsonify({'error': 'Server not available'}), 500
+    
+    try:
+        data = request.get_json()
+        offline_hours = data.get('offline_hours', 24) if data else 24
+        
+        # 计算离线时间阈值
+        from datetime import datetime, timedelta
+        threshold_time = datetime.now() - timedelta(hours=offline_hours)
+        
+        # 获取所有Agent
+        all_agents = server_instance.db.get_all_agents()
+        
+        deleted_agents = []
+        for agent in all_agents:
+            # 检查是否长时间离线
+            if agent['last_heartbeat']:
+                last_heartbeat = datetime.fromisoformat(agent['last_heartbeat'])
+                if last_heartbeat < threshold_time:
+                    try:
+                        # 从内存中删除
+                        if agent['id'] in server_instance.agents:
+                            del server_instance.agents[agent['id']]
+                        
+                        # 从数据库中删除
+                        conn = server_instance.db._get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute('DELETE FROM agents WHERE id = %s', (agent['id'],))
+                        cursor.execute('DELETE FROM agent_system_info WHERE agent_id = %s', (agent['id'],))
+                        conn.close()
+                        
+                        deleted_agents.append({
+                            'id': agent['id'],
+                            'hostname': agent['hostname'],
+                            'ip': agent['ip_address'],
+                            'last_heartbeat': agent['last_heartbeat']
+                        })
+                        
+                    except Exception as e:
+                        print(f"删除Agent {agent['id']} 失败: {e}")
+        
+        return jsonify({
+            'message': f'清理完成，删除了 {len(deleted_agents)} 个长时间离线的Agent',
+            'deleted_agents': deleted_agents,
+            'deleted_count': len(deleted_agents)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'清理离线Agent失败: {str(e)}'}), 500
