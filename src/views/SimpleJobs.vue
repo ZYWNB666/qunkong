@@ -9,10 +9,6 @@
               <el-icon><Plus /></el-icon>
               创建作业
             </el-button>
-            <el-button @click="showExecutionHistory = true">
-              <el-icon><Clock /></el-icon>
-              执行历史
-            </el-button>
           </div>
         </div>
       </template>
@@ -148,6 +144,22 @@
               <el-input v-model="step.step_name" placeholder="请输入步骤名称" />
             </el-form-item>
             
+            <el-form-item :label="`目标Agent`" label-width="100px">
+              <el-select 
+                v-model="step.target_agent_id" 
+                placeholder="选择目标Agent（留空则使用作业默认Agent）"
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="agent in agents"
+                  :key="agent.id"
+                  :label="`${agent.hostname} (${agent.ip})`"
+                  :value="agent.id"
+                />
+              </el-select>
+            </el-form-item>
+            
             <el-form-item :label="`脚本内容`" :prop="`steps.${index}.script_content`" label-width="100px">
               <el-input 
                 v-model="step.script_content" 
@@ -221,63 +233,16 @@
             </div>
             <div class="step-info">
               <el-tag size="small">超时: {{ step.timeout }}秒</el-tag>
+              <el-tag size="small" type="info" v-if="step.target_agent_id">
+                目标Agent: {{ getAgentName(step.target_agent_id) }}
+              </el-tag>
+              <el-tag size="small" type="warning" v-else>
+                使用作业默认Agent
+              </el-tag>
             </div>
           </el-timeline-item>
         </el-timeline>
       </div>
-    </el-dialog>
-
-    <!-- 执行历史对话框 -->
-    <el-dialog
-      v-model="showExecutionHistory"
-      title="执行历史"
-      width="80%"
-      :close-on-click-modal="false"
-    >
-      <el-table :data="executions" v-loading="loadingExecutions" stripe>
-        <el-table-column prop="job_name" label="作业名称" min-width="200" />
-        
-        <el-table-column prop="status" label="状态" width="120">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="进度" width="200">
-          <template #default="{ row }">
-            <div class="progress-info">
-              <span>{{ row.current_step }}/{{ row.total_steps }}</span>
-              <el-progress 
-                :percentage="getProgress(row)" 
-                :status="getProgressStatus(row.status)"
-                style="flex: 1; margin-left: 12px;"
-              />
-            </div>
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="started_at" label="开始时间" width="180">
-          <template #default="{ row }">
-            {{ formatDateTime(row.started_at) }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="completed_at" label="完成时间" width="180">
-          <template #default="{ row }">
-            {{ formatDateTime(row.completed_at) }}
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button type="text" size="small" @click="viewExecution(row)">
-              查看详情
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
     </el-dialog>
 
     <!-- 执行详情对话框 -->
@@ -332,20 +297,19 @@
 <script>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { simpleJobsApi, agentApi } from '../api'
 
 export default {
   name: 'SimpleJobs',
   setup() {
+    const router = useRouter()
     const loading = ref(false)
     const saving = ref(false)
-    const loadingExecutions = ref(false)
     const jobs = ref([])
     const agents = ref([])
-    const executions = ref([])
     const showCreateDialog = ref(false)
     const showViewDialog = ref(false)
-    const showExecutionHistory = ref(false)
     const showExecutionDetail = ref(false)
     const currentJob = ref(null)
     const currentExecution = ref(null)
@@ -388,19 +352,6 @@ export default {
       }
     }
 
-    // 加载执行历史
-    const loadExecutions = async () => {
-      try {
-        loadingExecutions.value = true
-        const data = await simpleJobsApi.getExecutions()
-        executions.value = data.executions || []
-      } catch (error) {
-        ElMessage.error('加载执行历史失败: ' + error.message)
-      } finally {
-        loadingExecutions.value = false
-      }
-    }
-
     // 添加环境变量
     const addEnvVar = () => {
       jobForm.env_vars_array.push({ key: '', value: '' })
@@ -416,6 +367,7 @@ export default {
       jobForm.steps.push({
         step_name: `步骤${jobForm.steps.length + 1}`,
         script_content: '',
+        target_agent_id: '',  // 新增字段
         timeout: 300
       })
     }
@@ -495,6 +447,7 @@ export default {
         jobForm.steps = jobData.steps.map(step => ({
           step_name: step.step_name,
           script_content: step.script_content,
+          target_agent_id: step.target_agent_id || '',  // 添加target_agent_id字段
           timeout: step.timeout
         }))
         
@@ -544,10 +497,9 @@ export default {
         const result = await simpleJobsApi.executeJob(job.id)
         ElMessage.success('作业开始执行，执行ID: ' + result.execution_id)
         
-        // 打开执行历史
+        // 跳转到任务历史页面
         setTimeout(() => {
-          loadExecutions()
-          showExecutionHistory.value = true
+          router.push('/execution-history')
         }, 1000)
         
       } catch (error) {
@@ -633,13 +585,10 @@ export default {
     return {
       loading,
       saving,
-      loadingExecutions,
       jobs,
       agents,
-      executions,
       showCreateDialog,
       showViewDialog,
-      showExecutionHistory,
       showExecutionDetail,
       currentJob,
       currentExecution,

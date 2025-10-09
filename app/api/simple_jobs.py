@@ -97,6 +97,7 @@ def create_job():
         for i, step in enumerate(steps):
             step_name = step.get('step_name', f'步骤{i+1}')
             script_content = step.get('script_content', '')
+            target_agent_id = step.get('target_agent_id', target_agent_id)  # 如果步骤没有指定agent，使用作业级别的agent
             timeout = step.get('timeout', 300)
             
             if not script_content:
@@ -107,7 +108,8 @@ def create_job():
                 step_name=step_name,
                 script_content=script_content,
                 step_order=i + 1,
-                timeout=timeout
+                timeout=timeout,
+                target_agent_id=target_agent_id
             )
         
         return jsonify({
@@ -340,12 +342,13 @@ async def execute_job_steps(execution_id: str, job: dict):
             step_name = step['step_name']
             script_content = step['script_content']
             timeout = step['timeout']
+            step_agent_id = step.get('target_agent_id') or agent_id  # 优先使用步骤级别的agent，否则使用作业级别的agent
             
             # 更新当前步骤
             job_manager.update_execution(
                 execution_id,
                 current_step=step_num,
-                log_entry=f"[步骤 {step_num}/{len(steps)}] 开始执行: {step_name}"
+                log_entry=f"[步骤 {step_num}/{len(steps)}] 开始执行: {step_name} (Agent: {step_agent_id})"
             )
             
             # 组合环境变量和脚本
@@ -354,7 +357,7 @@ async def execute_job_steps(execution_id: str, job: dict):
             # 创建任务
             task_id = server_instance.create_task(
                 script=full_script,
-                target_hosts=[agent_id],
+                target_hosts=[step_agent_id],
                 script_name=f"{job['name']} - {step_name}",
                 script_params="",
                 timeout=timeout,

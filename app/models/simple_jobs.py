@@ -46,10 +46,12 @@ class SimpleJobManager:
                     step_order INT NOT NULL,
                     step_name VARCHAR(255) NOT NULL,
                     script_content TEXT NOT NULL,
+                    target_agent_id VARCHAR(64),
                     timeout INT DEFAULT 300,
                     FOREIGN KEY (job_id) REFERENCES simple_jobs (id) ON DELETE CASCADE,
                     INDEX idx_job_id (job_id),
-                    INDEX idx_step_order (step_order)
+                    INDEX idx_step_order (step_order),
+                    INDEX idx_target_agent (target_agent_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -71,6 +73,16 @@ class SimpleJobManager:
                     INDEX idx_started_at (started_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
+            
+            # 检查并添加target_agent_id字段（用于数据库迁移）
+            try:
+                cursor.execute("SHOW COLUMNS FROM simple_job_steps LIKE 'target_agent_id'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE simple_job_steps ADD COLUMN target_agent_id VARCHAR(64) AFTER script_content")
+                    cursor.execute("ALTER TABLE simple_job_steps ADD INDEX idx_target_agent (target_agent_id)")
+                    print("数据库迁移：添加simple_job_steps.target_agent_id字段成功")
+            except Exception as e:
+                print(f"添加target_agent_id字段失败（可能已存在）: {e}")
             
             conn.close()
             print("简单作业表初始化成功")
@@ -172,7 +184,7 @@ class SimpleJobManager:
             
             # 获取步骤列表
             cursor.execute('''
-                SELECT id, step_order, step_name, script_content, timeout
+                SELECT id, step_order, step_name, script_content, target_agent_id, timeout
                 FROM simple_job_steps 
                 WHERE job_id = %s 
                 ORDER BY step_order
@@ -247,7 +259,7 @@ class SimpleJobManager:
             return []
     
     def add_step(self, job_id: str, step_name: str, script_content: str, 
-                 step_order: int = None, timeout: int = 300) -> str:
+                 step_order: int = None, timeout: int = 300, target_agent_id: str = None) -> str:
         """添加作业步骤"""
         try:
             step_id = str(uuid.uuid4())
@@ -265,9 +277,9 @@ class SimpleJobManager:
                 step_order = result['next_order']
             
             cursor.execute('''
-                INSERT INTO simple_job_steps (id, job_id, step_order, step_name, script_content, timeout)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (step_id, job_id, step_order, step_name, script_content, timeout))
+                INSERT INTO simple_job_steps (id, job_id, step_order, step_name, script_content, target_agent_id, timeout)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (step_id, job_id, step_order, step_name, script_content, target_agent_id, timeout))
             
             conn.close()
             return step_id
