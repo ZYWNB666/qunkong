@@ -22,5 +22,18 @@ export default defineConfig({
     __API_PORT__: JSON.stringify(config.api.port)
   },
   // 使用环境变量前缀 VITE_
-  envPrefix: 'VITE_'
+  envPrefix: 'VITE_',
+  // Monaco Editor 优化配置
+  optimizeDeps: {
+    include: ['monaco-editor', '@guolao/vue-monaco-editor']
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          monaco: ['monaco-editor']
+        }
+      }
+    }
+  }
 })

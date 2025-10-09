@@ -606,7 +606,6 @@ export default {
       deleteJob,
       executeJob,
       viewExecution,
-      loadExecutions,
       getAgentName,
       formatDateTime,
       getStatusType,

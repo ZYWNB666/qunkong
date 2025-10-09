@@ -115,7 +115,7 @@
                 <span>Agent</span>
               </el-menu-item>
               <el-menu-item index="/cloud-region">
-                <el-icon><CloudDownload /></el-icon>
+                <el-icon><Platform /></el-icon>
                 <span>云区域</span>
               </el-menu-item>
             </el-sub-menu>
