@@ -195,6 +195,8 @@ class QunkongServer:
         self.terminal_manager = TerminalManager()
         # 会话清理任务
         self.session_cleanup_task = None
+        # 主事件循环引用
+        self.loop = None
 
     async def register_agent(self, websocket, agent_info: dict):
         """注册 Agent"""
@@ -1111,10 +1113,40 @@ class QunkongServer:
             import traceback
             logger.error(traceback.format_exc())
             return False, f'发送更新命令失败: {str(e)}'
+    
+    async def send_agent_restart(self, agent_id: str):
+        """发送Agent重启命令"""
+        try:
+            if agent_id not in self.agents:
+                logger.error(f"Agent不存在: {agent_id}")
+                return False, 'Agent不存在'
+            
+            agent = self.agents[agent_id]
+            if agent.status != 'ONLINE' or not agent.websocket:
+                logger.error(f"Agent未连接: {agent_id}")
+                return False, 'Agent不在线'
+            
+            restart_message = {
+                'type': 'restart_agent',
+                'agent_id': agent_id,
+                'message': 'Batch restart requested'
+            }
+            
+            await agent.websocket.send(json.dumps(restart_message))
+            logger.info(f"已发送重启命令到Agent: {agent_id}")
+            return True, '重启命令已发送'
+            
+        except Exception as e:
+            logger.error(f"发送重启命令失败: {agent_id}, 错误: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False, f'重启失败: {str(e)}'
 
     async def start(self):
         """启动服务器"""
         self.running = True
+        # 保存当前事件循环的引用
+        self.loop = asyncio.get_event_loop()
         logger.info(f"Qunkong 服务器启动在 ws://{self.host}:{self.port}")
         
         # 启动心跳检查任务

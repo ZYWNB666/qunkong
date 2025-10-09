@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import asyncio
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from flask import Blueprint, jsonify, request
 from app.models import DatabaseManager
 from app.api.auth import require_auth, require_permission
@@ -588,54 +589,36 @@ def batch_manage_agents():
                     })
         
         elif action == 'restart':
-            # 批量重启Agent
-            def batch_restart():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                async def restart_agents():
-                    for agent_id in agent_ids:
-                        try:
-                            if agent_id in server_instance.agents:
-                                agent = server_instance.agents[agent_id]
-                                if agent.status == 'ONLINE' and agent.websocket:
-                                    restart_message = {
-                                        'type': 'restart_agent',
-                                        'agent_id': agent_id,
-                                        'message': 'Batch restart requested'
-                                    }
-                                    await agent.websocket.send(json.dumps(restart_message))
-                                    results.append({
-                                        'agent_id': agent_id,
-                                        'success': True,
-                                        'message': '重启命令已发送'
-                                    })
-                                else:
-                                    results.append({
-                                        'agent_id': agent_id,
-                                        'success': False,
-                                        'message': 'Agent不在线'
-                                    })
-                            else:
-                                results.append({
-                                    'agent_id': agent_id,
-                                    'success': False,
-                                    'message': 'Agent不存在'
-                                })
-                        except Exception as e:
-                            results.append({
-                                'agent_id': agent_id,
-                                'success': False,
-                                'message': f'重启失败: {str(e)}'
-                            })
-                
-                loop.run_until_complete(restart_agents())
-                loop.close()
+            # 批量重启Agent - 使用主事件循环
+            if not server_instance.loop:
+                return jsonify({'error': '服务器事件循环未就绪'}), 500
             
-            thread = threading.Thread(target=batch_restart)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=10)  # 等待最多10秒
+            for agent_id in agent_ids:
+                try:
+                    # 将协程提交到主事件循环
+                    future = asyncio.run_coroutine_threadsafe(
+                        server_instance.send_agent_restart(agent_id),
+                        server_instance.loop
+                    )
+                    # 等待结果（最多5秒）
+                    success, message = future.result(timeout=5)
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': success,
+                        'message': message
+                    })
+                except FutureTimeoutError:
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': '发送超时'
+                    })
+                except Exception as e:
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': f'重启失败: {str(e)}'
+                    })
         
         elif action == 'update':
             # 批量更新Agent版本
@@ -652,29 +635,37 @@ def batch_manage_agents():
             if not md5:
                 return jsonify({'error': '请提供MD5校验值'}), 400
             
-            # 使用server方法批量发送更新命令
-            def batch_update():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                async def update_agents():
-                    for agent_id in agent_ids:
-                        success, message = await server_instance.send_agent_update(
-                            agent_id, version, download_url, md5
-                        )
-                        results.append({
-                            'agent_id': agent_id,
-                            'success': success,
-                            'message': message
-                        })
-                
-                loop.run_until_complete(update_agents())
-                loop.close()
+            # 批量发送更新命令到主事件循环
+            # 确保主事件循环已设置
+            if not server_instance.loop:
+                return jsonify({'error': '服务器事件循环未就绪'}), 500
             
-            thread = threading.Thread(target=batch_update)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=30)  # 等待最多30秒
+            for agent_id in agent_ids:
+                try:
+                    # 将协程提交到主事件循环
+                    future = asyncio.run_coroutine_threadsafe(
+                        server_instance.send_agent_update(agent_id, version, download_url, md5),
+                        server_instance.loop
+                    )
+                    # 等待结果（最多5秒）
+                    success, message = future.result(timeout=5)
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': success,
+                        'message': message
+                    })
+                except FutureTimeoutError:
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': '发送超时'
+                    })
+                except Exception as e:
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': f'发送失败: {str(e)}'
+                    })
         
         else:
             return jsonify({'error': f'不支持的操作类型: {action}'}), 400
