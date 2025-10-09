@@ -555,38 +555,42 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
     showContextMenu(e.clientX, e.clientY)
   })
   
-  // 监听键盘事件
-  containerEl.addEventListener('keydown', (e) => {
+  // 使用xterm.js的attachCustomKeyEventHandler来处理键盘事件
+  terminal.attachCustomKeyEventHandler((e) => {
     // Ctrl+C: 如果有选中文本则复制，否则发送中断信号
     if (e.ctrlKey && e.key === 'c') {
       if (terminal.hasSelection()) {
         e.preventDefault()
         copySelectedText()
-        return
+        return false // 阻止xterm.js处理这个事件
       }
-      // 如果没有选中文本，让默认行为继续（发送中断信号）
+      // 如果没有选中文本，返回true让xterm.js处理（发送中断信号）
+      return true
     }
     
     // Ctrl+V: 粘贴
     if (e.ctrlKey && e.key === 'v') {
       e.preventDefault()
       pasteFromClipboard()
-      return
+      return false // 阻止xterm.js处理这个事件
     }
     
     // Ctrl+A: 全选
     if (e.ctrlKey && e.key === 'a') {
       e.preventDefault()
       terminal.selectAll()
-      return
+      return false // 阻止xterm.js处理这个事件
     }
     
     // Ctrl+L: 清屏
     if (e.ctrlKey && e.key === 'l') {
       e.preventDefault()
       clearTerminal(terminalId)
-      return
+      return false // 阻止xterm.js处理这个事件
     }
+    
+    // 对于其他按键，让xterm.js正常处理
+    return true
   })
   
   // 点击其他地方隐藏菜单
