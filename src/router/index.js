@@ -16,7 +16,7 @@ const routes = [
   },
   {
     path: '/',
-    redirect: '/script-execution'
+    redirect: '/terminal'
   },
   {
     path: '/script-execution',
@@ -43,8 +43,14 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/terminal/:agentId',
+    path: '/terminal',
     name: 'Terminal',
+    component: Terminal,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/terminal/:agentId',
+    name: 'TerminalAgent',
     component: Terminal,
     meta: { requiresAuth: true }
   }
@@ -66,7 +72,7 @@ router.beforeEach((to, from, next) => {
     next('/login')
   } else if (to.path === '/login' && token) {
     // 已登录用户访问登录页，跳转到首页
-    next('/')
+    next('/terminal')
   } else {
     next()
   }

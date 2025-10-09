@@ -1,7 +1,7 @@
 <template>
   <div id="app">
-    <!-- 登录页面不显示导航 -->
-    <router-view v-if="$route.path === '/login'" />
+    <!-- 登录页面和终端页面不显示导航 -->
+    <router-view v-if="$route.path === '/login' || $route.path.startsWith('/terminal')" />
     
     <!-- 主应用布局 -->
     <el-container v-else>
@@ -230,9 +230,15 @@ export default {
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden; /* 防止页面滚动 */
+}
+
 #app {
   height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden; /* 防止app容器滚动 */
 }
 
 .header {
