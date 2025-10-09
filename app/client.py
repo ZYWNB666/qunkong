@@ -1395,6 +1395,9 @@ class QunkongAgent:
                         # 处理服务器消息
                         try:
                             async for message in websocket:
+                                # 记录收到的消息
+                                logger.info("★★★ 收到服务器消息: {}".format(message[:200] if len(message) > 200 else message))
+                                
                                 # 检查心跳任务是否异常结束
                                 if heartbeat_task_handle.done():
                                     try:
