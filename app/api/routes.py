@@ -638,17 +638,24 @@ def batch_manage_agents():
             # 批量发送更新命令到主事件循环
             # 确保主事件循环已设置
             if not server_instance.loop:
+                logger.error("服务器事件循环未就绪")
                 return jsonify({'error': '服务器事件循环未就绪'}), 500
+            
+            logger.info(f"准备批量更新 {len(agent_ids)} 个Agent")
+            logger.info(f"主事件循环: {server_instance.loop}")
             
             for agent_id in agent_ids:
                 try:
+                    logger.info(f"正在处理Agent: {agent_id}")
                     # 将协程提交到主事件循环
                     future = asyncio.run_coroutine_threadsafe(
                         server_instance.send_agent_update(agent_id, version, download_url, md5),
                         server_instance.loop
                     )
+                    logger.info(f"协程已提交到主事件循环，等待结果...")
                     # 等待结果（最多5秒）
                     success, message = future.result(timeout=5)
+                    logger.info(f"收到结果: success={success}, message={message}")
                     results.append({
                         'agent_id': agent_id,
                         'success': success,

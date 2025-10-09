@@ -1087,14 +1087,28 @@ class QunkongServer:
     async def send_agent_update(self, agent_id: str, version: str, download_url: str, md5: str):
         """发送Agent更新命令"""
         try:
+            logger.info(f"开始发送更新命令: agent_id={agent_id}, version={version}")
+            logger.info(f"当前事件循环: {asyncio.get_event_loop()}")
+            logger.info(f"主事件循环: {self.loop}")
+            
             if agent_id not in self.agents:
                 logger.error(f"Agent不存在: {agent_id}")
                 return False, 'Agent不存在'
             
             agent = self.agents[agent_id]
+            logger.info(f"Agent状态: {agent.status}, WebSocket对象: {agent.websocket}")
+            
             if agent.status != 'ONLINE' or not agent.websocket:
                 logger.error(f"Agent未连接: {agent_id}")
                 return False, 'Agent未连接'
+            
+            # 检查WebSocket状态
+            ws_state = "unknown"
+            if hasattr(agent.websocket, 'open'):
+                ws_state = "open" if agent.websocket.open else "closed"
+            elif hasattr(agent.websocket, 'closed'):
+                ws_state = "closed" if agent.websocket.closed else "open"
+            logger.info(f"WebSocket状态: {ws_state}")
             
             update_message = {
                 'type': 'update_agent',
@@ -1104,12 +1118,14 @@ class QunkongServer:
                 'md5': md5
             }
             
+            logger.info(f"准备发送消息: {json.dumps(update_message)}")
             await agent.websocket.send(json.dumps(update_message))
-            logger.info(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
+            logger.info(f"✓ WebSocket.send() 调用完成")
+            logger.info(f"✓ 已发送更新命令到Agent: {agent_id}, 版本: {version}")
             return True, f'已发送更新命令，版本: {version}'
             
         except Exception as e:
-            logger.error(f"发送更新命令失败: {agent_id}, 错误: {e}")
+            logger.error(f"❌ 发送更新命令失败: {agent_id}, 错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False, f'发送更新命令失败: {str(e)}'
