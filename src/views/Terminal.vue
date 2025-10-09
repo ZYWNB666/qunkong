@@ -270,7 +270,7 @@ const initializeTerminal = () => {
 
 const connectTerminalWebSocket = (agentId) => {
   try {
-    const wsUrl = `ws://${window.location.hostname}:18765/terminal/${agentId}`
+    const wsUrl = `ws://${__WEBSOCKET_HOST__}:${__WEBSOCKET_PORT__}/terminal/${agentId}`
     console.log('连接终端WebSocket:', wsUrl)
     
     terminalWebSocket.value = new WebSocket(wsUrl)
