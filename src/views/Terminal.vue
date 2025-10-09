@@ -528,24 +528,88 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
     }
   }
   
+  // 创建隐藏的粘贴输入框（降级方案）
+  const createPasteInput = () => {
+    const pasteInput = document.createElement('textarea')
+    pasteInput.style.position = 'fixed'
+    pasteInput.style.left = '-9999px'
+    pasteInput.style.top = '-9999px'
+    pasteInput.style.opacity = '0'
+    pasteInput.style.pointerEvents = 'none'
+    document.body.appendChild(pasteInput)
+    return pasteInput
+  }
+
   // 从剪贴板粘贴
   const pasteFromClipboard = async () => {
     try {
-      const text = await navigator.clipboard.readText()
-      if (text) {
-        // 将粘贴的文本发送到终端
-        const ws = websocketConnections.value.get(terminalId)
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          const message = {
-            type: 'terminal_input',
-            data: text
+      // 首先尝试现代剪贴板API
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        try {
+          const text = await navigator.clipboard.readText()
+          if (text) {
+            sendTextToTerminal(text)
+            ElMessage.success(`已粘贴 ${text.length} 个字符`)
+            return
           }
-          ws.send(JSON.stringify(message))
+        } catch (clipboardErr) {
+          console.log('现代剪贴板API失败，尝试降级方案:', clipboardErr)
         }
       }
+
+      // 降级方案：使用隐藏输入框
+      const pasteInput = createPasteInput()
+      pasteInput.focus()
+      pasteInput.select()
+      
+      // 监听粘贴事件
+      const handlePaste = (e) => {
+        e.preventDefault()
+        const text = e.clipboardData?.getData('text/plain') || ''
+        if (text) {
+          sendTextToTerminal(text)
+          ElMessage.success(`已粘贴 ${text.length} 个字符`)
+        } else {
+          ElMessage.warning('剪贴板为空')
+        }
+        
+        // 清理
+        pasteInput.removeEventListener('paste', handlePaste)
+        document.body.removeChild(pasteInput)
+        
+        // 重新聚焦到终端
+        containerEl.focus()
+      }
+      
+      pasteInput.addEventListener('paste', handlePaste)
+      
+      // 触发粘贴
+      document.execCommand('paste')
+      
+      // 如果3秒后还没有粘贴事件，清理资源
+      setTimeout(() => {
+        if (document.body.contains(pasteInput)) {
+          pasteInput.removeEventListener('paste', handlePaste)
+          document.body.removeChild(pasteInput)
+          ElMessage.error('粘贴超时，请尝试使用 Ctrl+Shift+V')
+        }
+      }, 3000)
+      
     } catch (err) {
       console.error('粘贴失败:', err)
-      ElMessage.error('粘贴失败，请使用 Ctrl+V')
+      ElMessage.error('粘贴失败，请尝试使用 Ctrl+Shift+V 或右键菜单')
+    }
+  }
+
+  // 发送文本到终端
+  const sendTextToTerminal = (text) => {
+    const ws = websocketConnections.value.get(terminalId)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const message = {
+        type: 'terminal_input',
+        data: text
+      }
+      ws.send(JSON.stringify(message))
     }
   }
   
@@ -568,11 +632,18 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
       return true
     }
     
-    // Ctrl+V: 粘贴
+    // Ctrl+V 或 Ctrl+Shift+V: 粘贴
     if (e.ctrlKey && e.key === 'v') {
       e.preventDefault()
       pasteFromClipboard()
       return false // 阻止xterm.js处理这个事件
+    }
+    
+    // Ctrl+Shift+V: 浏览器原生粘贴（具有更高权限）
+    if (e.ctrlKey && e.shiftKey && e.key === 'V') {
+      // 让浏览器处理原生粘贴，但我们也尝试处理
+      pasteFromClipboard()
+      return true // 让浏览器也处理这个事件
     }
     
     // Ctrl+A: 全选
