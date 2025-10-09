@@ -1,0 +1,28 @@
+[Unit]
+Description=Qunkong Agent - Distributed Script Execution System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/qunkong-agent
+ExecStart=/opt/qunkong-agent/qunkong-agent --server SERVER_HOST --port SERVER_PORT
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 环境变量
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+# 资源限制
+LimitNOFILE=65536
+
+# 安全设置
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

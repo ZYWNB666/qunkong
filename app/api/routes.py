@@ -651,16 +651,72 @@ def batch_manage_agents():
         elif action == 'update':
             # 批量更新Agent版本
             version = data.get('version', '')
+            download_url = data.get('download_url', '')
+            md5 = data.get('md5', '')
+            
             if not version:
                 return jsonify({'error': '请指定目标版本'}), 400
             
-            # 这里实现批量更新逻辑
-            for agent_id in agent_ids:
-                results.append({
-                    'agent_id': agent_id,
-                    'success': False,
-                    'message': '批量更新功能暂未实现'
-                })
+            if not download_url:
+                return jsonify({'error': '请提供下载URL'}), 400
+            
+            if not md5:
+                return jsonify({'error': '请提供MD5校验值'}), 400
+            
+            # 实现批量更新逻辑 - 通过WebSocket发送更新命令
+            def batch_update():
+                loop = asyncio.new_event_loop()
+                
+                async def update_agents():
+                    for agent_id in agent_ids:
+                        try:
+                            # 查找Agent的WebSocket连接
+                            websocket_conn = None
+                            for ws, info in server_instance.agents.items():
+                                if info['agent_id'] == agent_id:
+                                    websocket_conn = ws
+                                    break
+                            
+                            if not websocket_conn:
+                                results.append({
+                                    'agent_id': agent_id,
+                                    'success': False,
+                                    'message': 'Agent未连接'
+                                })
+                                continue
+                            
+                            # 发送更新命令
+                            update_message = {
+                                'type': 'update_agent',
+                                'agent_id': agent_id,
+                                'version': version,
+                                'download_url': download_url,
+                                'md5': md5
+                            }
+                            
+                            await websocket_conn.send(json.dumps(update_message))
+                            logger.info(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
+                            
+                            results.append({
+                                'agent_id': agent_id,
+                                'success': True,
+                                'message': f'已发送更新命令，版本: {version}'
+                            })
+                            
+                        except Exception as e:
+                            results.append({
+                                'agent_id': agent_id,
+                                'success': False,
+                                'message': f'发送更新命令失败: {str(e)}'
+                            })
+                
+                loop.run_until_complete(update_agents())
+                loop.close()
+            
+            thread = threading.Thread(target=batch_update)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=10)  # 等待最多10秒
         
         else:
             return jsonify({'error': f'不支持的操作类型: {action}'}), 400

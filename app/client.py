@@ -659,6 +659,13 @@ class QunkongAgent:
                 session_id = data.get('session_id')
                 logger.info(f"收到终端关闭命令: {session_id}")
                 await self.handle_terminal_close(session_id)
+            elif msg_type == 'update_agent':
+                # 更新Agent
+                download_url = data.get('download_url')
+                version = data.get('version', 'unknown')
+                md5_expected = data.get('md5', '')
+                logger.info(f"收到更新Agent命令: 版本 {version}, URL: {download_url}, MD5: {md5_expected}")
+                await self.handle_update_agent(download_url, version, md5_expected)
                 
         except Exception as e:
             logger.error("处理服务器消息失败: {}".format(e))
@@ -767,6 +774,190 @@ class QunkongAgent:
                     'agent_id': self.agent_id,
                     'restart_type': 'host',
                     'success': False,
+                    'error_message': str(e)
+                }
+                await self.websocket.send(json.dumps(error_response))
+            except:
+                pass
+
+    async def handle_update_agent(self, download_url: str, version: str, md5_expected: str = ''):
+        """处理更新Agent命令"""
+        try:
+            logger.info(f"开始更新Agent: 版本 {version}, URL: {download_url}, MD5: {md5_expected}")
+            
+            # 发送更新开始响应
+            response_message = {
+                'type': 'update_agent_response',
+                'agent_id': self.agent_id,
+                'status': 'downloading',
+                'version': version,
+                'message': '正在下载新版本...'
+            }
+            await self.websocket.send(json.dumps(response_message))
+            
+            # 下载新版本
+            import requests
+            import tempfile
+            
+            # 创建临时文件
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.new')
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            try:
+                logger.info(f"下载文件到: {temp_path}")
+                response = requests.get(download_url, stream=True, timeout=300)
+                response.raise_for_status()
+                
+                # 写入文件
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                
+                with open(temp_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = (downloaded / total_size) * 100
+                                if int(progress) % 20 == 0:  # 每20%发送一次进度
+                                    logger.info(f"下载进度: {progress:.1f}%")
+                
+                logger.info("下载完成")
+                
+                # 校验MD5
+                if md5_expected:
+                    logger.info("开始校验MD5...")
+                    
+                    # 计算下载文件的MD5
+                    import hashlib
+                    md5_hash = hashlib.md5()
+                    with open(temp_path, 'rb') as f:
+                        for chunk in iter(lambda: f.read(8192), b''):
+                            md5_hash.update(chunk)
+                    
+                    md5_actual = md5_hash.hexdigest().lower()
+                    md5_expected_lower = md5_expected.lower()
+                    
+                    logger.info(f"文件MD5: {md5_actual}")
+                    logger.info(f"期望MD5: {md5_expected_lower}")
+                    
+                    if md5_actual != md5_expected_lower:
+                        error_msg = f'MD5校验失败！期望: {md5_expected_lower}, 实际: {md5_actual}'
+                        logger.error(error_msg)
+                        raise Exception(error_msg)
+                    
+                    logger.info("MD5校验通过")
+                else:
+                    logger.warning("未提供MD5校验值，跳过校验")
+                
+                # 发送下载完成响应
+                response_message = {
+                    'type': 'update_agent_response',
+                    'agent_id': self.agent_id,
+                    'status': 'installing',
+                    'version': version,
+                    'message': 'MD5校验通过，正在安装...' if md5_expected else '下载完成，正在安装...'
+                }
+                await self.websocket.send(json.dumps(response_message))
+                
+                # 获取当前可执行文件路径
+                current_exe = sys.executable
+                
+                # 检查是否为打包的二进制文件
+                is_frozen = getattr(sys, 'frozen', False)
+                
+                if is_frozen:
+                    # PyInstaller打包的二进制文件
+                    current_exe = sys.executable
+                else:
+                    # Python脚本，查找二进制文件位置
+                    possible_paths = [
+                        '/opt/qunkong-agent/qunkong-agent',
+                        '/usr/local/bin/qunkong-agent',
+                        '/usr/bin/qunkong-agent'
+                    ]
+                    
+                    current_exe = None
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            current_exe = path
+                            break
+                    
+                    if not current_exe:
+                        raise Exception("无法找到当前可执行文件")
+                
+                logger.info(f"当前可执行文件: {current_exe}")
+                
+                # 备份当前版本
+                backup_path = current_exe + '.backup'
+                if os.path.exists(current_exe):
+                    import shutil
+                    shutil.copy2(current_exe, backup_path)
+                    logger.info(f"已备份当前版本到: {backup_path}")
+                
+                # 替换可执行文件
+                import shutil
+                shutil.move(temp_path, current_exe)
+                os.chmod(current_exe, 0o755)
+                
+                # 更新版本信息
+                version_file = os.path.join(os.path.dirname(current_exe), 'version.txt')
+                with open(version_file, 'w') as f:
+                    f.write(f"{version}\n")
+                    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                
+                logger.info("安装完成")
+                
+                # 发送更新成功响应
+                response_message = {
+                    'type': 'update_agent_response',
+                    'agent_id': self.agent_id,
+                    'status': 'success',
+                    'version': version,
+                    'message': f'更新成功，版本: {version}，正在重启...'
+                }
+                await self.websocket.send(json.dumps(response_message))
+                
+                # 延迟后重启agent
+                await asyncio.sleep(2)
+                
+                # 检查是否由systemd管理
+                is_systemd = os.path.exists('/etc/systemd/system/qunkong-agent.service')
+                
+                if is_systemd:
+                    # 由systemd管理，直接退出让systemd重启
+                    logger.info("检测到systemd管理，退出进程让systemd重启...")
+                    os._exit(0)
+                else:
+                    # 手动重启
+                    logger.info("手动重启Agent...")
+                    restart_cmd = [current_exe]
+                    if hasattr(sys, 'argv') and len(sys.argv) > 1:
+                        restart_cmd.extend(sys.argv[1:])
+                    
+                    import subprocess
+                    subprocess.Popen(restart_cmd, 
+                                   cwd=os.getcwd(),
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                    os._exit(0)
+                    
+            except Exception as e:
+                # 清理临时文件
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise e
+                
+        except Exception as e:
+            logger.error(f"更新Agent失败: {e}")
+            # 发送失败响应
+            try:
+                error_response = {
+                    'type': 'update_agent_response',
+                    'agent_id': self.agent_id,
+                    'status': 'failed',
+                    'version': version,
                     'error_message': str(e)
                 }
                 await self.websocket.send(json.dumps(error_response))

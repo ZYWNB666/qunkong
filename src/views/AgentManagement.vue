@@ -348,7 +348,27 @@
             </el-radio-group>
           </el-form-item>
           <el-form-item v-if="batchForm.action === 'update'" label="目标版本">
-            <el-input v-model="batchForm.version" placeholder="请输入目标版本" />
+            <el-input v-model="batchForm.version" placeholder="例如: v1.0.2" />
+          </el-form-item>
+          <el-form-item v-if="batchForm.action === 'update'" label="下载URL">
+            <el-input 
+              v-model="batchForm.downloadUrl" 
+              type="textarea"
+              :rows="2"
+              placeholder="请输入二进制文件下载URL，例如: http://your-server.com/qunkong-agent" 
+            />
+            <div style="margin-top: 8px; font-size: 12px; color: #909399;">
+              提示：可以是HTTP/HTTPS URL，Agent会自动下载并替换二进制文件
+            </div>
+          </el-form-item>
+          <el-form-item v-if="batchForm.action === 'update'" label="MD5校验">
+            <el-input 
+              v-model="batchForm.md5" 
+              placeholder="请输入二进制文件的MD5值（32位十六进制）" 
+            />
+            <div style="margin-top: 8px; font-size: 12px; color: #909399;">
+              提示：用于验证下载文件的完整性，防止文件损坏或被篡改
+            </div>
           </el-form-item>
           <el-form-item v-if="batchForm.action === 'delete_down'">
             <el-alert
@@ -699,7 +719,9 @@ export default {
 
     const batchForm = reactive({
       action: 'restart',
-      version: ''
+      version: '',
+      downloadUrl: '',
+      md5: ''
     })
 
     const filteredAgents = computed(() => {
@@ -1028,11 +1050,36 @@ export default {
         
         // 调用批量管理API
         const agentIds = selectedAgents.value.map(agent => agent.id)
-        const response = await agentApi.batchManageAgents({
+        const requestData = {
           action: batchForm.action,
           agent_ids: agentIds,
           version: batchForm.version
-        })
+        }
+        
+        // 如果是更新操作，添加下载URL和MD5
+        if (batchForm.action === 'update') {
+          if (!batchForm.version) {
+            ElMessage.warning('请输入目标版本')
+            return
+          }
+          if (!batchForm.downloadUrl) {
+            ElMessage.warning('请输入下载URL')
+            return
+          }
+          if (!batchForm.md5) {
+            ElMessage.warning('请输入MD5校验值')
+            return
+          }
+          // 验证MD5格式（32位十六进制）
+          if (!/^[a-fA-F0-9]{32}$/.test(batchForm.md5)) {
+            ElMessage.warning('MD5格式不正确，应为32位十六进制字符')
+            return
+          }
+          requestData.download_url = batchForm.downloadUrl
+          requestData.md5 = batchForm.md5.toLowerCase()
+        }
+        
+        const response = await agentApi.batchManageAgents(requestData)
         
         // 显示操作结果
         if (response.success_count > 0) {
