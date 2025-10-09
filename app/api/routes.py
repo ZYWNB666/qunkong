@@ -130,7 +130,7 @@ def get_servers():
     agents = server_instance.db.get_all_agents()
     servers = []
     for agent in agents:
-        servers.append({
+        server_data = {
             'id': agent['id'],
             'hostname': agent['hostname'],
             'ip': agent['ip_address'],  # 内网IP
@@ -138,7 +138,12 @@ def get_servers():
             'status': agent['status'],
             'last_heartbeat': agent['last_heartbeat'],
             'register_time': agent['register_time']
-        })
+        }
+        # 调试日志
+        print(f"API返回Agent数据 - ID: {agent['id']}, external_ip: {agent.get('external_ip', 'NOT_FOUND')}")
+        servers.append(server_data)
+    
+    print(f"API返回总共 {len(servers)} 个Agent")
     return jsonify(servers)
 
 @api_bp.route('/agents', methods=['GET'])
