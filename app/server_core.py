@@ -208,6 +208,10 @@ class QunkongServer:
         # 设置当前时间作为初始心跳时间
         current_time = datetime.now().isoformat()
         
+        # 调试日志
+        logger.info(f"注册Agent - ID: {agent_id}, hostname: {agent_info.get('hostname')}, "
+                   f"内网IP: {agent_info.get('ip')}, 外网IP: {agent_info.get('external_ip')}")
+        
         agent = Agent(
             id=agent_id,
             hostname=agent_info.get('hostname', 'Unknown'),
@@ -230,6 +234,10 @@ class QunkongServer:
             'register_time': datetime.now().isoformat(),
             'websocket_info': {}
         }
+        
+        # 调试日志
+        logger.info(f"保存到数据库的Agent数据: {agent_data}")
+        
         self.db.save_agent(agent_data)
 
         # 保存Agent系统信息到数据库

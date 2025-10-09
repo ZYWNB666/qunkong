@@ -36,8 +36,15 @@ class QunkongAgent:
         self.server_host = server_host
         self.server_port = server_port
         self.hostname = platform.node()
+        
+        # 获取内网IP
         self.ip = self.get_local_ip()  # 内网IP
+        logger.info(f"获取内网IP: {self.ip}")
+        
+        # 获取外网IP
         self.external_ip = self.get_external_ip()  # 外网IP
+        logger.info(f"获取外网IP: {self.external_ip}")
+        
         # 如果没有指定agent_id，使用内网IP的MD5值
         self.agent_id = agent_id or hashlib.md5(self.ip.encode('utf-8')).hexdigest()
         self.websocket = None
@@ -73,23 +80,57 @@ class QunkongAgent:
     def get_external_ip(self):
         """获取外网IP地址"""
         import socket
-        import requests
+        
+        # 方法1：通过连接外部服务器获取（这个方法通常能获取到外网IP）
         try:
-            # 方法1：通过连接外部服务器获取
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             external_ip = s.getsockname()[0]
             s.close()
-            return external_ip
+            
+            # 检查是否是内网IP，如果是则尝试其他方法
+            if not self._is_private_ip(external_ip):
+                logger.info(f"通过socket获取外网IP: {external_ip}")
+                return external_ip
+        except Exception as e:
+            logger.warning(f"方法1获取外网IP失败: {e}")
+        
+        # 方法2：通过HTTP请求获取外网IP
+        try:
+            response = requests.get('https://httpbin.org/ip', timeout=10)
+            if response.status_code == 200:
+                external_ip = response.json().get('origin', '').split(',')[0].strip()
+                logger.info(f"通过HTTP请求获取外网IP: {external_ip}")
+                return external_ip
+        except Exception as e:
+            logger.warning(f"方法2获取外网IP失败: {e}")
+        
+        # 方法3：使用其他免费IP查询服务
+        try:
+            response = requests.get('https://api.ipify.org?format=json', timeout=10)
+            if response.status_code == 200:
+                external_ip = response.json().get('ip', '').strip()
+                logger.info(f"通过ipify获取外网IP: {external_ip}")
+                return external_ip
+        except Exception as e:
+            logger.warning(f"方法3获取外网IP失败: {e}")
+        
+        logger.warning("所有方法都无法获取外网IP")
+        return None
+    
+    def _is_private_ip(self, ip):
+        """检查是否是私有IP地址"""
+        try:
+            import ipaddress
+            ip_obj = ipaddress.IPv4Address(ip)
+            return ip_obj.is_private
         except:
-            try:
-                # 方法2：通过HTTP请求获取外网IP
-                response = requests.get('https://httpbin.org/ip', timeout=5)
-                if response.status_code == 200:
-                    return response.json().get('origin', '').split(',')[0].strip()
-            except:
-                pass
-            return None
+            # 简单检查常见的私有IP段
+            if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.'):
+                return True
+            if ip.startswith('127.') or ip == 'localhost':
+                return True
+            return False
 
     def get_system_info(self):
         """获取系统信息"""
@@ -526,6 +567,7 @@ class QunkongAgent:
             'system_info': system_info
         }
 
+        logger.info(f"发送注册消息: hostname={self.hostname}, ip={self.ip}, external_ip={self.external_ip}")
         await self.websocket.send(json.dumps(register_message))
         logger.info("向服务器注册: {}".format(self.hostname))
 
