@@ -477,9 +477,8 @@ class QunkongAgent:
                 'timestamp': datetime.now().isoformat()
             }
             message_json = json.dumps(heartbeat_message)
-            logger.debug("发送心跳消息: {}".format(message_json[:100]))
             await websocket.send(message_json)
-            logger.debug("心跳已发送")
+            # 移除频繁的心跳日志，减少I/O开销
         except Exception as e:
             logger.error("send_heartbeat 内部异常: {} (类型: {})".format(e, type(e).__name__))
             raise
@@ -1067,7 +1066,7 @@ class QunkongAgent:
                     
                     # 转换为字符串
                     output = data.decode('utf-8', errors='replace')
-                    logger.debug(f"PTY输出 {session_id}: {repr(output)}")
+                    # 移除频繁的日志记录，提升性能
                     
                     # 将数据放入队列
                     try:
@@ -1163,47 +1162,30 @@ class QunkongAgent:
                 command = self.command_buffers[session_id].strip()
                 if command:
                     logger.info(f"用户执行命令 [{session_id[:8]}...]: {command}")
-                else:
-                    logger.debug(f"用户按下回车 [{session_id[:8]}...]")
                 self.command_buffers[session_id] = ""  # 清空缓冲区
             elif data == '\x7f':  # 退格键
                 if self.command_buffers[session_id]:
                     self.command_buffers[session_id] = self.command_buffers[session_id][:-1]
-                logger.debug(f"用户退格 [{session_id[:8]}...], 当前输入: '{self.command_buffers[session_id]}'")
             elif data == '\x03':  # Ctrl+C
                 logger.info(f"用户中断命令 [{session_id[:8]}...]: Ctrl+C")
                 self.command_buffers[session_id] = ""  # 清空缓冲区
             elif data == '\x04':  # Ctrl+D
                 logger.info(f"用户发送EOF [{session_id[:8]}...]: Ctrl+D")
-            elif data == '\t':  # Tab键
-                logger.debug(f"用户按下Tab键 [{session_id[:8]}...], 当前输入: '{self.command_buffers[session_id]}'")
-            elif data.startswith('\x1b['):  # ANSI转义序列（方向键等）
-                if data == '\x1b[A':
-                    logger.debug(f"用户按上方向键 [{session_id[:8]}...]")
-                elif data == '\x1b[B':
-                    logger.debug(f"用户按下方向键 [{session_id[:8]}...]")
-                elif data == '\x1b[C':
-                    logger.debug(f"用户按右方向键 [{session_id[:8]}...]")
-                elif data == '\x1b[D':
-                    logger.debug(f"用户按左方向键 [{session_id[:8]}...]")
-                else:
-                    logger.debug(f"收到ANSI序列 [{session_id[:8]}...]: {repr(data)}")
+            elif data == '\t':  # Tab键 - 不记录日志，减少性能开销
+                pass
+            elif data.startswith('\x1b['):  # ANSI转义序列（方向键等） - 不记录日志
+                pass
             elif len(data) == 1 and ord(data) >= 32 and ord(data) <= 126:  # 单个可打印字符
                 self.command_buffers[session_id] += data
-                # 只在命令较长时记录调试日志
-                if len(self.command_buffers[session_id]) % 10 == 0:
-                    logger.debug(f"用户输入中 [{session_id[:8]}...]: '{self.command_buffers[session_id]}'")
+                # 移除频繁的日志记录，避免性能问题
             elif len(data) > 1:  # 多字符输入（粘贴、多字节字符等）
                 # 处理多字符输入，过滤掉控制字符，只保留可打印字符
                 printable_chars = ''.join(char for char in data if ord(char) >= 32 and ord(char) <= 126)
                 if printable_chars:
                     self.command_buffers[session_id] += printable_chars
-                    logger.info(f"用户输入多字符 [{session_id[:8]}...]: '{printable_chars}'")
-                else:
-                    logger.debug(f"收到多字符控制序列 [{session_id[:8]}...]: {repr(data)}")
-            else:
-                # 其他控制字符
-                logger.debug(f"收到控制字符 [{session_id[:8]}...]: {repr(data)}")
+                    # 粘贴操作才记录日志
+                    if len(printable_chars) > 5:
+                        logger.info(f"用户粘贴文本 [{session_id[:8]}...]: {len(printable_chars)} 字符")
             
             # 将输入写入PTY
             bytes_written = os.write(master_fd, data.encode('utf-8'))
@@ -1379,10 +1361,8 @@ class QunkongAgent:
                                         pass
                                     
                                     try:
-                                        logger.debug("准备发送心跳")
                                         await self.send_heartbeat(websocket)
                                         consecutive_failures = 0  # 重置失败计数
-                                        logger.debug("心跳发送成功，等待5秒")
                                         await asyncio.sleep(5)  # 每5秒发送一次心跳（降低频率）
                                     except websockets.exceptions.ConnectionClosed:
                                         logger.warning("心跳发送失败: 连接已关闭")
