@@ -208,10 +208,6 @@ class QunkongServer:
         # 设置当前时间作为初始心跳时间
         current_time = datetime.now().isoformat()
         
-        # 调试日志
-        logger.info(f"注册Agent - ID: {agent_id}, hostname: {agent_info.get('hostname')}, "
-                   f"内网IP: {agent_info.get('ip')}, 外网IP: {agent_info.get('external_ip')}")
-        
         agent = Agent(
             id=agent_id,
             hostname=agent_info.get('hostname', 'Unknown'),
@@ -234,9 +230,6 @@ class QunkongServer:
             'register_time': datetime.now().isoformat(),
             'websocket_info': {}
         }
-        
-        # 调试日志
-        logger.info(f"保存到数据库的Agent数据: {agent_data}")
         
         self.db.save_agent(agent_data)
 
@@ -277,18 +270,21 @@ class QunkongServer:
                     self.agents[agent_id].status = "ONLINE"
                     
                     # 更新数据库中的心跳时间
-                    # 先获取现有的注册时间，避免覆盖
+                    # 先获取现有的Agent完整信息，避免覆盖其他字段
                     existing_agents = self.db.get_all_agents()
                     register_time = current_time  # 默认值
+                    external_ip = ''  # 默认值
                     for existing_agent in existing_agents:
                         if existing_agent['id'] == agent_id:
                             register_time = existing_agent['register_time']
+                            external_ip = existing_agent.get('external_ip', '')
                             break
                     
                     agent_data = {
                         'id': agent_id,
                         'hostname': self.agents[agent_id].hostname,
                         'ip_address': self.agents[agent_id].ip,
+                        'external_ip': external_ip,  # 保持原有的外网IP
                         'status': 'ONLINE',
                         'last_heartbeat': current_time,
                         'register_time': register_time,
@@ -887,6 +883,7 @@ class QunkongServer:
                             'id': agent_id,
                             'hostname': existing_agent['hostname'],
                             'ip_address': existing_agent['ip_address'],
+                            'external_ip': existing_agent.get('external_ip', ''),  # 保持原有的外网IP
                             'status': 'OFFLINE',
                             'last_heartbeat': existing_agent['last_heartbeat'],
                             'register_time': existing_agent['register_time'],
@@ -935,6 +932,7 @@ class QunkongServer:
                                     'id': agent_id,
                                     'hostname': existing_agent['hostname'],
                                     'ip_address': existing_agent['ip_address'],
+                                    'external_ip': existing_agent.get('external_ip', ''),  # 保持原有的外网IP
                                     'status': 'OFFLINE',
                                     'last_heartbeat': existing_agent['last_heartbeat'],
                                     'register_time': existing_agent['register_time'],

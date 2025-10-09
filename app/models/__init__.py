@@ -347,9 +347,6 @@ class DatabaseManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # 调试日志
-            print(f"数据库保存Agent - external_ip: {agent_data.get('external_ip', 'NOT_FOUND')}")
-            
             cursor.execute('''
                 INSERT INTO agents
                 (id, hostname, ip_address, external_ip, status, last_heartbeat, register_time, websocket_info)
@@ -357,10 +354,9 @@ class DatabaseManager:
                 ON DUPLICATE KEY UPDATE
                 hostname = VALUES(hostname),
                 ip_address = VALUES(ip_address),
-                external_ip = VALUES(external_ip),
+                external_ip = COALESCE(VALUES(external_ip), external_ip),
                 status = VALUES(status),
                 last_heartbeat = VALUES(last_heartbeat),
-                register_time = VALUES(register_time),
                 websocket_info = VALUES(websocket_info)
             ''', (
                 agent_data.get('id'),
@@ -372,12 +368,6 @@ class DatabaseManager:
                 agent_data.get('register_time', ''),
                 json.dumps(agent_data.get('websocket_info', {}))
             ))
-            
-            # 验证是否成功保存
-            cursor.execute('SELECT external_ip FROM agents WHERE id = %s', (agent_data.get('id'),))
-            result = cursor.fetchone()
-            if result:
-                print(f"数据库验证 - 保存后的external_ip: {result.get('external_ip', 'NOT_FOUND')}")
             
             conn.close()
             return True
