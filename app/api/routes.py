@@ -133,7 +133,8 @@ def get_servers():
         servers.append({
             'id': agent['id'],
             'hostname': agent['hostname'],
-            'ip': agent['ip_address'],
+            'ip': agent['ip_address'],  # 内网IP
+            'external_ip': agent.get('external_ip', ''),  # 外网IP
             'status': agent['status'],
             'last_heartbeat': agent['last_heartbeat'],
             'register_time': agent['register_time']

@@ -223,7 +223,8 @@ class QunkongServer:
         agent_data = {
             'id': agent_id,
             'hostname': agent.hostname,
-            'ip_address': agent.ip,
+            'ip_address': agent.ip,  # 内网IP
+            'external_ip': agent_info.get('external_ip', ''),  # 外网IP
             'status': agent.status,
             'last_heartbeat': agent.last_heartbeat,
             'register_time': datetime.now().isoformat(),

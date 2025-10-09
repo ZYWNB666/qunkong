@@ -23,6 +23,7 @@ import sys
 import tempfile
 import secrets
 import queue
+import requests
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +36,9 @@ class QunkongAgent:
         self.server_host = server_host
         self.server_port = server_port
         self.hostname = platform.node()
-        self.ip = self.get_local_ip()
-        # 如果没有指定agent_id，使用IP的MD5值
+        self.ip = self.get_local_ip()  # 内网IP
+        self.external_ip = self.get_external_ip()  # 外网IP
+        # 如果没有指定agent_id，使用内网IP的MD5值
         self.agent_id = agent_id or hashlib.md5(self.ip.encode('utf-8')).hexdigest()
         self.websocket = None
         self.running = False
@@ -45,19 +47,49 @@ class QunkongAgent:
         self.current_directory = os.path.expanduser("~")  # 当前工作目录
 
     def get_local_ip(self):
-        """获取本地IP地址"""
+        """获取本地内网IP地址"""
         import socket
         try:
-            # 连接到服务器获取本机IP
+            # 优先获取内网IP地址
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # 使用服务器地址，如果是localhost则使用8.8.8.8
-            target_host = self.server_host if self.server_host != 'localhost' else '8.8.8.8'
-            s.connect((target_host, 80))
-            ip = s.getsockname()[0]
+            # 连接到局域网地址来获取内网IP
+            s.connect(("10.254.254.254", 80))
+            local_ip = s.getsockname()[0]
             s.close()
-            return ip
+            return local_ip
         except:
+            # 如果上面失败，尝试其他方法获取内网IP
+            try:
+                import socket
+                hostname = socket.gethostname()
+                local_ip = socket.gethostbyname(hostname)
+                # 确保是内网IP（不是127.0.0.1）
+                if local_ip != "127.0.0.1":
+                    return local_ip
+            except:
+                pass
             return "127.0.0.1"
+
+    def get_external_ip(self):
+        """获取外网IP地址"""
+        import socket
+        import requests
+        try:
+            # 方法1：通过连接外部服务器获取
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            external_ip = s.getsockname()[0]
+            s.close()
+            return external_ip
+        except:
+            try:
+                # 方法2：通过HTTP请求获取外网IP
+                response = requests.get('https://httpbin.org/ip', timeout=5)
+                if response.status_code == 200:
+                    return response.json().get('origin', '').split(',')[0].strip()
+            except:
+                pass
+            return None
 
     def get_system_info(self):
         """获取系统信息"""
@@ -487,7 +519,8 @@ class QunkongAgent:
             'type': 'register',
             'agent_id': self.agent_id,
             'hostname': self.hostname,
-            'ip': self.ip,
+            'ip': self.ip,  # 内网IP
+            'external_ip': self.external_ip,  # 外网IP
             'platform': platform.system(),
             'python_version': platform.python_version(),
             'system_info': system_info

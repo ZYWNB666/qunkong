@@ -61,6 +61,7 @@ class DatabaseManager:
                     id VARCHAR(64) PRIMARY KEY,
                     hostname VARCHAR(255) NOT NULL,
                     ip_address VARCHAR(45) NOT NULL,
+                    external_ip VARCHAR(45) DEFAULT '',
                     status VARCHAR(20) DEFAULT 'OFFLINE',
                     last_heartbeat DATETIME,
                     register_time DATETIME,
@@ -69,10 +70,21 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX idx_hostname (hostname),
                     INDEX idx_ip_address (ip_address),
+                    INDEX idx_external_ip (external_ip),
                     INDEX idx_status (status),
                     INDEX idx_last_heartbeat (last_heartbeat)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
+            
+            # 检查并添加external_ip字段（用于数据库迁移）
+            try:
+                cursor.execute("SHOW COLUMNS FROM agents LIKE 'external_ip'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE agents ADD COLUMN external_ip VARCHAR(45) DEFAULT '' AFTER ip_address")
+                    cursor.execute("ALTER TABLE agents ADD INDEX idx_external_ip (external_ip)")
+                    print("数据库迁移：添加external_ip字段成功")
+            except Exception as e:
+                print(f"添加external_ip字段失败（可能已存在）: {e}")
             
             # 创建执行历史表
             cursor.execute('''
@@ -337,11 +349,12 @@ class DatabaseManager:
             
             cursor.execute('''
                 INSERT INTO agents
-                (id, hostname, ip_address, status, last_heartbeat, register_time, websocket_info)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (id, hostname, ip_address, external_ip, status, last_heartbeat, register_time, websocket_info)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 hostname = VALUES(hostname),
                 ip_address = VALUES(ip_address),
+                external_ip = VALUES(external_ip),
                 status = VALUES(status),
                 last_heartbeat = VALUES(last_heartbeat),
                 register_time = VALUES(register_time),
@@ -350,6 +363,7 @@ class DatabaseManager:
                 agent_data.get('id'),
                 agent_data.get('hostname', ''),
                 agent_data.get('ip_address', ''),
+                agent_data.get('external_ip', ''),
                 agent_data.get('status', 'OFFLINE'),
                 agent_data.get('last_heartbeat', ''),
                 agent_data.get('register_time', ''),
@@ -369,7 +383,7 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, hostname, ip_address, status, last_heartbeat, register_time, websocket_info
+                SELECT id, hostname, ip_address, external_ip, status, last_heartbeat, register_time, websocket_info
                 FROM agents
                 ORDER BY register_time DESC
             ''')
@@ -386,6 +400,7 @@ class DatabaseManager:
                     'id': row['id'],
                     'hostname': row['hostname'],
                     'ip_address': row['ip_address'],
+                    'external_ip': row.get('external_ip', ''),
                     'status': row['status'],
                     'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
                     'register_time': row['register_time'].isoformat() if row['register_time'] else None,
