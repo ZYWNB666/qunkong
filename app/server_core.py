@@ -1082,6 +1082,36 @@ class QunkongServer:
                     'execution_time': 0
                 }
 
+    async def send_agent_update(self, agent_id: str, version: str, download_url: str, md5: str):
+        """发送Agent更新命令"""
+        try:
+            if agent_id not in self.agents:
+                logger.error(f"Agent不存在: {agent_id}")
+                return False, 'Agent不存在'
+            
+            agent = self.agents[agent_id]
+            if agent.status != 'ONLINE' or not agent.websocket:
+                logger.error(f"Agent未连接: {agent_id}")
+                return False, 'Agent未连接'
+            
+            update_message = {
+                'type': 'update_agent',
+                'agent_id': agent_id,
+                'version': version,
+                'download_url': download_url,
+                'md5': md5
+            }
+            
+            await agent.websocket.send(json.dumps(update_message))
+            logger.info(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
+            return True, f'已发送更新命令，版本: {version}'
+            
+        except Exception as e:
+            logger.error(f"发送更新命令失败: {agent_id}, 错误: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False, f'发送更新命令失败: {str(e)}'
+
     async def start(self):
         """启动服务器"""
         self.running = True
