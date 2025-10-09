@@ -2,10 +2,15 @@
 API路由定义
 """
 import json
+import logging
+import threading
+import asyncio
 from flask import Blueprint, jsonify, request
 from app.models import DatabaseManager
 from app.api.auth import require_auth, require_permission
 from dataclasses import asdict
+
+logger = logging.getLogger(__name__)
 
 # 创建蓝图
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -186,9 +191,7 @@ def execute_script():
         )
         
         # 异步执行任务
-        import threading
         def run_task():
-            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(server_instance.dispatch_task(task_id))
@@ -232,9 +235,7 @@ def retry_task(task_id):
         )
         
         # 异步执行任务
-        import threading
         def run_task():
-            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(server_instance.dispatch_task(new_task_id))
@@ -336,9 +337,6 @@ def restart_agent(agent_id):
             return jsonify({'error': 'Agent is not online'}), 400
         
         # 发送重启Agent命令
-        import asyncio
-        import threading
-        
         def send_restart_command():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -382,9 +380,6 @@ def restart_host(agent_id):
             return jsonify({'error': 'Agent is not online'}), 400
         
         # 发送重启主机命令
-        import asyncio
-        import threading
-        
         def send_restart_command():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -474,9 +469,6 @@ def close_terminal_session_api(session_id):
             return jsonify({'error': 'Terminal session not found'}), 404
         
         # 异步关闭会话
-        import asyncio
-        import threading
-        
         def close_session():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -597,9 +589,6 @@ def batch_manage_agents():
         
         elif action == 'restart':
             # 批量重启Agent
-            import asyncio
-            import threading
-            
             def batch_restart():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -695,7 +684,7 @@ def batch_manage_agents():
                             }
                             
                             await websocket_conn.send(json.dumps(update_message))
-                            logger.info(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
+                            print(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
                             
                             results.append({
                                 'agent_id': agent_id,
