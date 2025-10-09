@@ -5,6 +5,7 @@ import ScriptExecution from '../views/ScriptExecution.vue'
 import ExecutionHistory from '../views/ExecutionHistory.vue'
 import AgentManagement from '../views/AgentManagement.vue'
 import SimpleJobs from '../views/SimpleJobs.vue'
+import Terminal from '../views/Terminal.vue'
 
 const routes = [
   {
@@ -39,6 +40,12 @@ const routes = [
     path: '/jobs',
     name: 'SimpleJobs',
     component: SimpleJobs,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/terminal/:agentId',
+    name: 'Terminal',
+    component: Terminal,
     meta: { requiresAuth: true }
   }
 ]

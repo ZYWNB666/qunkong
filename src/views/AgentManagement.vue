@@ -1226,19 +1226,9 @@ export default {
         return
       }
       
-      currentTerminalAgent.value = agent
-      showTerminalDialog.value = true
-      terminalStatus.value = 'connecting'
-      
-      // 延迟等待对话框完全打开
-      await nextTick()
-      await new Promise(resolve => setTimeout(resolve, 300))
-      
-      // 初始化xterm.js终端
-      initializeTerminal()
-      
-      // 建立WebSocket连接
-      connectTerminalWebSocket(agent.id)
+      // 在新标签页中打开终端
+      const terminalUrl = `/terminal/${agent.id}?hostname=${encodeURIComponent(agent.hostname)}&ip=${encodeURIComponent(agent.ip)}`
+      window.open(terminalUrl, '_blank', 'noopener,noreferrer')
     }
     
     const initializeTerminal = () => {
