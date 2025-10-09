@@ -289,6 +289,7 @@ onUnmounted(() => {
   
   // 移除全局事件监听器
   window.removeEventListener('resize', handleGlobalResize)
+  
 })
 
 // 窗口关闭前确认
@@ -423,20 +424,18 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
     menu.innerHTML = `
       <div class="context-menu-item" data-action="copy">
         <span>复制</span>
-        <span class="shortcut">Ctrl+C</span>
+        <span class="shortcut">Ctrl+Shift+C</span>
       </div>
       <div class="context-menu-item" data-action="paste">
         <span>粘贴</span>
-        <span class="shortcut">Ctrl+V</span>
+        <span class="shortcut">Ctrl+Shift+V</span>
       </div>
       <div class="context-menu-divider"></div>
       <div class="context-menu-item" data-action="selectall">
         <span>全选</span>
-        <span class="shortcut">Ctrl+A</span>
       </div>
       <div class="context-menu-item" data-action="clear">
         <span>清屏</span>
-        <span class="shortcut">Ctrl+L</span>
       </div>
     `
     document.body.appendChild(menu)
@@ -540,11 +539,12 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
     return pasteInput
   }
 
-  // 从剪贴板粘贴 - 用于右键菜单
+  // 从剪贴板粘贴 - 最简单直接的方法
   const pasteFromClipboard = async () => {
     try {
+      // 只使用现代剪贴板API，不搞复杂的降级方案
       const text = await navigator.clipboard.readText()
-      if (text) {
+      if (text && text.trim()) {
         sendTextToTerminal(text)
         ElMessage.success(`已粘贴 ${text.length} 个字符`)
       } else {
@@ -552,7 +552,12 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
       }
     } catch (err) {
       console.error('粘贴失败:', err)
-      ElMessage.error('粘贴失败，请尝试使用 Ctrl+V')
+      // 给出明确的解决方案
+      ElMessage({
+        message: '粘贴失败！请尝试：1. 刷新页面后重试 2. 在浏览器地址栏输入 chrome://settings/content/clipboard 允许剪贴板访问',
+        type: 'error',
+        duration: 8000
+      })
     }
   }
 
@@ -574,95 +579,54 @@ const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
     showContextMenu(e.clientX, e.clientY)
   })
   
+  // 延迟添加paste事件监听器，等待xterm元素创建完成
+  setTimeout(() => {
+    const xtermElement = containerEl.querySelector('.xterm')
+    if (xtermElement) {
+      xtermElement.addEventListener('paste', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        
+        const text = e.clipboardData?.getData('text/plain') || ''
+        if (text) {
+          sendTextToTerminal(text)
+          ElMessage.success(`已粘贴 ${text.length} 个字符`)
+        }
+      })
+    }
+  }, 200)
+  
+  
   // 使用xterm.js的attachCustomKeyEventHandler来处理键盘事件
   terminal.attachCustomKeyEventHandler((e) => {
-    // Ctrl+C: 如果有选中文本则复制，否则发送中断信号
-    if (e.ctrlKey && e.key === 'c') {
+    // 只处理复制相关的快捷键，其他都交给Shell处理
+    
+    // Ctrl+Shift+C: 复制（标准终端快捷键）
+    if (e.ctrlKey && e.shiftKey && e.key === 'C') {
       if (terminal.hasSelection()) {
         e.preventDefault()
         copySelectedText()
-        return false // 阻止xterm.js处理这个事件
+        return false
       }
-      // 如果没有选中文本，返回true让xterm.js处理（发送中断信号）
+    }
+    
+    // Ctrl+Shift+V: 粘贴（标准终端快捷键）
+    if (e.ctrlKey && e.shiftKey && e.key === 'V') {
+      // 让浏览器处理粘贴，通过paste事件捕获
       return true
     }
     
-    // Ctrl+V: 粘贴 - 在用户交互上下文中直接处理
-    if (e.ctrlKey && e.key === 'v' && !e.shiftKey) {
-      e.preventDefault()
-      
-      // 直接在这个事件处理器中处理粘贴，确保在用户交互上下文中
-      const handleDirectPaste = async () => {
-        try {
-          // 在用户交互上下文中，现代剪贴板API更容易成功
-          const text = await navigator.clipboard.readText()
-          if (text) {
-            sendTextToTerminal(text)
-            ElMessage.success(`已粘贴 ${text.length} 个字符`)
-            return
-          }
-        } catch (err) {
-          console.log('现代剪贴板API失败，使用降级方案:', err)
-          
-          // 降级方案：创建临时输入框
-          const tempInput = document.createElement('textarea')
-          tempInput.style.position = 'fixed'
-          tempInput.style.left = '-9999px'
-          tempInput.style.opacity = '0'
-          document.body.appendChild(tempInput)
-          
-          tempInput.focus()
-          tempInput.select()
-          
-          // 监听粘贴事件
-          const onPaste = (pasteEvent) => {
-            pasteEvent.preventDefault()
-            const pastedText = pasteEvent.clipboardData?.getData('text/plain') || ''
-            if (pastedText) {
-              sendTextToTerminal(pastedText)
-              ElMessage.success(`已粘贴 ${pastedText.length} 个字符`)
-            } else {
-              ElMessage.warning('剪贴板为空')
-            }
-            
-            // 清理
-            tempInput.removeEventListener('paste', onPaste)
-            document.body.removeChild(tempInput)
-            terminal.focus()
-          }
-          
-          tempInput.addEventListener('paste', onPaste)
-          
-          // 执行粘贴命令
-          const success = document.execCommand('paste')
-          if (!success) {
-            // 如果execCommand失败，清理并提示
-            tempInput.removeEventListener('paste', onPaste)
-            document.body.removeChild(tempInput)
-            ElMessage.error('粘贴失败，请确保剪贴板中有内容')
-          }
-        }
-      }
-      
-      handleDirectPaste()
-      return false // 阻止xterm.js处理这个事件
-    }
-    
-    // Ctrl+A: 全选
-    if (e.ctrlKey && e.key === 'a') {
-      e.preventDefault()
-      terminal.selectAll()
-      return false // 阻止xterm.js处理这个事件
-    }
-    
-    // Ctrl+L: 清屏
-    if (e.ctrlKey && e.key === 'l') {
-      e.preventDefault()
-      clearTerminal(terminalId)
-      return false // 阻止xterm.js处理这个事件
-    }
-    
-    // 对于其他按键，让xterm.js正常处理
+    // 所有其他按键都交给xterm.js处理，包括：
+    // Ctrl+A: 移动到行首
+    // Ctrl+E: 移动到行尾
+    // Ctrl+K: 删除从光标到行尾
+    // Ctrl+U: 删除从光标到行首
+    // Ctrl+L: Shell清屏命令
+    // Ctrl+C: 发送中断信号
+    // Ctrl+D: 发送EOF
+    // Ctrl+Z: 挂起进程
+    // Ctrl+R: 反向搜索历史
+    // Ctrl+W: 删除前一个单词
     return true
   })
   
