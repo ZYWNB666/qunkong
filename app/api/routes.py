@@ -652,63 +652,72 @@ def batch_manage_agents():
             if not md5:
                 return jsonify({'error': '请提供MD5校验值'}), 400
             
-            # 实现批量更新逻辑 - 通过WebSocket发送更新命令
-            def batch_update():
-                loop = asyncio.new_event_loop()
-                
-                async def update_agents():
-                    for agent_id in agent_ids:
+            # 同步方式：直接发送更新命令
+            for agent_id in agent_ids:
+                try:
+                    # 查找Agent
+                    if agent_id not in server_instance.agents:
+                        results.append({
+                            'agent_id': agent_id,
+                            'success': False,
+                            'message': 'Agent不存在'
+                        })
+                        continue
+                    
+                    agent = server_instance.agents[agent_id]
+                    if agent.status != 'ONLINE' or not agent.websocket:
+                        results.append({
+                            'agent_id': agent_id,
+                            'success': False,
+                            'message': 'Agent未连接'
+                        })
+                        continue
+                    
+                    # 发送更新命令 - 使用同步方式
+                    update_message = {
+                        'type': 'update_agent',
+                        'agent_id': agent_id,
+                        'version': version,
+                        'download_url': download_url,
+                        'md5': md5
+                    }
+                    
+                    # 使用线程安全的方式发送
+                    def send_update(ws, msg, aid):
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
                         try:
-                            # 查找Agent
-                            if agent_id not in server_instance.agents:
-                                results.append({
-                                    'agent_id': agent_id,
-                                    'success': False,
-                                    'message': 'Agent不存在'
-                                })
-                                continue
-                            
-                            agent = server_instance.agents[agent_id]
-                            if agent.status != 'ONLINE' or not agent.websocket:
-                                results.append({
-                                    'agent_id': agent_id,
-                                    'success': False,
-                                    'message': 'Agent未连接'
-                                })
-                                continue
-                            
-                            # 发送更新命令
-                            update_message = {
-                                'type': 'update_agent',
-                                'agent_id': agent_id,
-                                'version': version,
-                                'download_url': download_url,
-                                'md5': md5
-                            }
-                            
-                            await agent.websocket.send(json.dumps(update_message))
-                            print(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
-                            
-                            results.append({
-                                'agent_id': agent_id,
-                                'success': True,
-                                'message': f'已发送更新命令，版本: {version}'
-                            })
-                            
+                            loop.run_until_complete(ws.send(json.dumps(msg)))
+                            print(f"已发送更新命令到Agent: {aid}, 版本: {version}")
                         except Exception as e:
-                            results.append({
-                                'agent_id': agent_id,
-                                'success': False,
-                                'message': f'发送更新命令失败: {str(e)}'
-                            })
-                
-                loop.run_until_complete(update_agents())
-                loop.close()
-            
-            thread = threading.Thread(target=batch_update)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=10)  # 等待最多10秒
+                            print(f"发送失败: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            raise
+                        finally:
+                            loop.close()
+                    
+                    thread = threading.Thread(target=send_update, args=(agent.websocket, update_message, agent_id))
+                    thread.daemon = True
+                    thread.start()
+                    thread.join(timeout=5)  # 等待最多5秒
+                    
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': True,
+                        'message': f'已发送更新命令，版本: {version}'
+                    })
+                    
+                except Exception as e:
+                    import traceback
+                    error_detail = traceback.format_exc()
+                    print(f"发送更新命令到Agent {agent_id} 失败: {e}")
+                    print(f"错误详情: {error_detail}")
+                    results.append({
+                        'agent_id': agent_id,
+                        'success': False,
+                        'message': f'发送更新命令失败: {str(e)}'
+                    })
         
         else:
             return jsonify({'error': f'不支持的操作类型: {action}'}), 400
