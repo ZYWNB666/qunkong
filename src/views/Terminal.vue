@@ -412,6 +412,195 @@ const closeTerminalTab = async (terminalId) => {
   }
 }
 
+// 设置终端右键菜单和复制粘贴功能
+const setupTerminalContextMenu = (terminal, containerEl, terminalId) => {
+  let contextMenu = null
+  
+  // 创建右键菜单
+  const createContextMenu = () => {
+    const menu = document.createElement('div')
+    menu.className = 'terminal-context-menu'
+    menu.innerHTML = `
+      <div class="context-menu-item" data-action="copy">
+        <span>复制</span>
+        <span class="shortcut">Ctrl+C</span>
+      </div>
+      <div class="context-menu-item" data-action="paste">
+        <span>粘贴</span>
+        <span class="shortcut">Ctrl+V</span>
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item" data-action="selectall">
+        <span>全选</span>
+        <span class="shortcut">Ctrl+A</span>
+      </div>
+      <div class="context-menu-item" data-action="clear">
+        <span>清屏</span>
+        <span class="shortcut">Ctrl+L</span>
+      </div>
+    `
+    document.body.appendChild(menu)
+    return menu
+  }
+  
+  // 显示右键菜单
+  const showContextMenu = (x, y) => {
+    hideContextMenu()
+    contextMenu = createContextMenu()
+    
+    // 设置菜单位置
+    contextMenu.style.left = x + 'px'
+    contextMenu.style.top = y + 'px'
+    
+    // 确保菜单不超出屏幕边界
+    const rect = contextMenu.getBoundingClientRect()
+    if (rect.right > window.innerWidth) {
+      contextMenu.style.left = (x - rect.width) + 'px'
+    }
+    if (rect.bottom > window.innerHeight) {
+      contextMenu.style.top = (y - rect.height) + 'px'
+    }
+    
+    // 更新菜单项状态
+    const hasSelection = terminal.hasSelection()
+    const copyItem = contextMenu.querySelector('[data-action="copy"]')
+    if (copyItem) {
+      copyItem.classList.toggle('disabled', !hasSelection)
+    }
+    
+    // 添加菜单项点击事件
+    contextMenu.addEventListener('click', handleContextMenuClick)
+  }
+  
+  // 隐藏右键菜单
+  const hideContextMenu = () => {
+    if (contextMenu) {
+      contextMenu.removeEventListener('click', handleContextMenuClick)
+      document.body.removeChild(contextMenu)
+      contextMenu = null
+    }
+  }
+  
+  // 处理右键菜单点击
+  const handleContextMenuClick = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    const action = e.target.closest('.context-menu-item')?.dataset.action
+    if (!action) return
+    
+    switch (action) {
+      case 'copy':
+        copySelectedText()
+        break
+      case 'paste':
+        pasteFromClipboard()
+        break
+      case 'selectall':
+        terminal.selectAll()
+        break
+      case 'clear':
+        clearTerminal(terminalId)
+        break
+    }
+    
+    hideContextMenu()
+  }
+  
+  // 复制选中文本
+  const copySelectedText = async () => {
+    const selection = terminal.getSelection()
+    if (selection) {
+      try {
+        await navigator.clipboard.writeText(selection)
+        ElMessage.success('已复制到剪贴板')
+      } catch (err) {
+        console.error('复制失败:', err)
+        // 降级方案：使用传统方法
+        const textArea = document.createElement('textarea')
+        textArea.value = selection
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+        ElMessage.success('已复制到剪贴板')
+      }
+    }
+  }
+  
+  // 从剪贴板粘贴
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) {
+        // 将粘贴的文本发送到终端
+        const ws = websocketConnections.value.get(terminalId)
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const message = {
+            type: 'terminal_input',
+            data: text
+          }
+          ws.send(JSON.stringify(message))
+        }
+      }
+    } catch (err) {
+      console.error('粘贴失败:', err)
+      ElMessage.error('粘贴失败，请使用 Ctrl+V')
+    }
+  }
+  
+  // 监听右键点击
+  containerEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    showContextMenu(e.clientX, e.clientY)
+  })
+  
+  // 监听键盘事件
+  containerEl.addEventListener('keydown', (e) => {
+    // Ctrl+C: 如果有选中文本则复制，否则发送中断信号
+    if (e.ctrlKey && e.key === 'c') {
+      if (terminal.hasSelection()) {
+        e.preventDefault()
+        copySelectedText()
+        return
+      }
+      // 如果没有选中文本，让默认行为继续（发送中断信号）
+    }
+    
+    // Ctrl+V: 粘贴
+    if (e.ctrlKey && e.key === 'v') {
+      e.preventDefault()
+      pasteFromClipboard()
+      return
+    }
+    
+    // Ctrl+A: 全选
+    if (e.ctrlKey && e.key === 'a') {
+      e.preventDefault()
+      terminal.selectAll()
+      return
+    }
+    
+    // Ctrl+L: 清屏
+    if (e.ctrlKey && e.key === 'l') {
+      e.preventDefault()
+      clearTerminal(terminalId)
+      return
+    }
+  })
+  
+  // 点击其他地方隐藏菜单
+  document.addEventListener('click', hideContextMenu)
+  document.addEventListener('contextmenu', (e) => {
+    if (!containerEl.contains(e.target)) {
+      hideContextMenu()
+    }
+  })
+  
+  // 确保容器可以获得焦点
+  containerEl.setAttribute('tabindex', '-1')
+}
+
 const initializeTerminal = (terminalId) => {
   try {
     const containerEl = terminalRefs.value.get(terminalId)
@@ -492,6 +681,9 @@ const initializeTerminal = (terminalId) => {
         ws.send(JSON.stringify(resizeMessage))
       }
     })
+    
+    // 添加右键菜单和复制粘贴功能
+    setupTerminalContextMenu(terminal, containerEl, terminalId)
     
     // 存储终端实例
     terminalInstances.value.set(terminalId, {
@@ -1199,5 +1391,54 @@ code {
     width: 100%;
     justify-content: center;
   }
+}
+
+/* 终端右键菜单样式 */
+:global(.terminal-context-menu) {
+  position: fixed;
+  background: #2d2d30;
+  border: 1px solid #3e3e42;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  min-width: 160px;
+  z-index: 10000;
+  font-size: 13px;
+  color: #cccccc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+:global(.context-menu-item) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+:global(.context-menu-item:hover) {
+  background: #094771;
+}
+
+:global(.context-menu-item.disabled) {
+  color: #6c6c6c;
+  cursor: not-allowed;
+}
+
+:global(.context-menu-item.disabled:hover) {
+  background: transparent;
+}
+
+:global(.context-menu-divider) {
+  height: 1px;
+  background: #3e3e42;
+  margin: 4px 0;
+}
+
+:global(.shortcut) {
+  font-size: 11px;
+  color: #888888;
+  margin-left: 16px;
 }
 </style>

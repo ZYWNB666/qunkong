@@ -997,11 +997,19 @@ class QunkongAgent:
                     logger.debug(f"用户按左方向键 [{session_id[:8]}...]")
                 else:
                     logger.debug(f"收到ANSI序列 [{session_id[:8]}...]: {repr(data)}")
-            elif ord(data) >= 32 and ord(data) <= 126:  # 可打印字符
+            elif len(data) == 1 and ord(data) >= 32 and ord(data) <= 126:  # 单个可打印字符
                 self.command_buffers[session_id] += data
                 # 只在命令较长时记录调试日志
                 if len(self.command_buffers[session_id]) % 10 == 0:
                     logger.debug(f"用户输入中 [{session_id[:8]}...]: '{self.command_buffers[session_id]}'")
+            elif len(data) > 1:  # 多字符输入（粘贴、多字节字符等）
+                # 处理多字符输入，过滤掉控制字符，只保留可打印字符
+                printable_chars = ''.join(char for char in data if ord(char) >= 32 and ord(char) <= 126)
+                if printable_chars:
+                    self.command_buffers[session_id] += printable_chars
+                    logger.info(f"用户输入多字符 [{session_id[:8]}...]: '{printable_chars}'")
+                else:
+                    logger.debug(f"收到多字符控制序列 [{session_id[:8]}...]: {repr(data)}")
             else:
                 # 其他控制字符
                 logger.debug(f"收到控制字符 [{session_id[:8]}...]: {repr(data)}")
