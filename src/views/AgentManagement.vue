@@ -794,8 +794,8 @@ export default {
       
       console.log(`Heartbeat check: ${lastHeartbeat}, diff: ${diffMinutes.toFixed(2)} minutes`)
       
-      // 如果心跳时间超过15秒，认为离线
-      return diffMinutes <= 0.25  // 15秒 = 0.25分钟
+      // 如果心跳时间超过30秒，认为离线（与服务端保持一致）
+      return diffMinutes <= 0.5  // 30秒 = 0.5分钟
     }
 
     const refreshAgents = () => {

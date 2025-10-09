@@ -798,7 +798,12 @@ class QunkongServer:
     async def handle_client(self, websocket, path):
         """处理客户端连接"""
         client_ip = websocket.remote_address[0]
-        logger.info(f"新连接: {websocket.remote_address} path: '{path}' (type: {type(path)})")
+        client_port = websocket.remote_address[1]
+        logger.info(f"新连接: {client_ip}:{client_port} path: '{path}' (type: {type(path)})")
+        
+        # 记录连接的详细信息
+        connection_start_time = datetime.now()
+        logger.info(f"连接建立时间: {connection_start_time.isoformat()}")
         
         # 检查是否是终端WebSocket连接
         if path and path.startswith('/terminal/'):
@@ -810,12 +815,18 @@ class QunkongServer:
             logger.info(f"普通WebSocket连接，进入Agent消息处理流程")
         
         agent_id = None
+        message_count = 0
         
         try:
             async for message in websocket:
                 try:
+                    message_count += 1
                     data = json.loads(message)
                     msg_type = data.get('type')
+                    
+                    # 记录消息统计
+                    if message_count % 10 == 0:  # 每10条消息记录一次
+                        logger.debug(f"连接 {client_ip}:{client_port} 已处理 {message_count} 条消息")
                     
                     # 检查是否是终端消息（路径解析失败的备用方案）
                     if msg_type in ['terminal_input', 'terminal_resize', 'terminal_ping']:
@@ -861,9 +872,11 @@ class QunkongServer:
                     logger.error(f"处理消息时出错: {e}")
                     
         except websockets.exceptions.ConnectionClosed:
-            logger.info(f"连接关闭: {client_ip}")
+            connection_duration = (datetime.now() - connection_start_time).total_seconds()
+            logger.info(f"连接关闭: {client_ip}:{client_port}, 持续时间: {connection_duration:.1f}秒, 处理消息数: {message_count}")
         except Exception as e:
-            logger.error(f"连接错误: {e}")
+            connection_duration = (datetime.now() - connection_start_time).total_seconds()
+            logger.error(f"连接错误: {client_ip}:{client_port}, 错误: {e}, 持续时间: {connection_duration:.1f}秒")
         finally:
             # 清理断开连接的Agent
             await self.cleanup_disconnected_agent(agent_id, client_ip)
@@ -901,10 +914,17 @@ class QunkongServer:
 
     async def check_agent_heartbeats(self):
         """检查Agent心跳，将超时的Agent标记为离线"""
+        check_count = 0
         while self.running:
             try:
+                check_count += 1
                 current_time = datetime.now()
                 timeout_agents = []
+                
+                # 每10次检查记录一次统计信息
+                if check_count % 10 == 0:
+                    online_count = sum(1 for agent in self.agents.values() if agent.status == "ONLINE")
+                    logger.debug(f"心跳检查 #{check_count}: 在线Agent数量: {online_count}/{len(self.agents)}")
                 
                 for agent_id, agent in self.agents.items():
                     if agent.last_heartbeat:
@@ -912,10 +932,13 @@ class QunkongServer:
                             last_heartbeat_time = datetime.fromisoformat(agent.last_heartbeat)
                             time_diff = (current_time - last_heartbeat_time).total_seconds()
                             
-                            # 如果超过15秒没有心跳，标记为离线
-                            if time_diff > 15 and agent.status == "ONLINE":
+                            # 如果超过30秒没有心跳，标记为离线（从15秒调整为30秒）
+                            if time_diff > 30 and agent.status == "ONLINE":
                                 timeout_agents.append(agent_id)
                                 logger.info(f"Agent {agent_id} 心跳超时 ({time_diff:.1f}s)，标记为离线")
+                            elif time_diff > 20 and agent.status == "ONLINE":
+                                # 超过20秒给出警告，但不断开连接
+                                logger.warning(f"Agent {agent_id} 心跳延迟 ({time_diff:.1f}s)，接近超时阈值")
                         except ValueError as e:
                             logger.error(f"解析心跳时间失败 {agent.last_heartbeat}: {e}")
                 

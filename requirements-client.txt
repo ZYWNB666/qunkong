@@ -1,0 +1,36 @@
+# Qunkong Agent客户端依赖 - Linux专用版本
+# 仅包含Agent客户端运行所需的最小依赖包
+
+# WebSocket通信
+websockets==11.0.3
+
+# 系统监控和进程管理
+psutil==5.9.5
+
+# HTTP请求（用于获取外网IP等）
+requests==2.31.0
+
+# 注意：以下包为Python标准库，无需安装
+# - asyncio (Python 3.4+)
+# - json (标准库)
+# - logging (标准库)
+# - platform (标准库)
+# - hashlib (标准库)
+# - subprocess (标准库)
+# - os (标准库)
+# - datetime (标准库)
+# - pty (Unix/Linux标准库)
+# - select (Unix/Linux标准库)
+# - termios (Unix/Linux标准库)
+# - struct (标准库)
+# - fcntl (Unix/Linux标准库)
+# - signal (标准库)
+# - threading (标准库)
+# - queue (标准库)
+# - time (标准库)
+# - sys (标准库)
+# - tempfile (标准库)
+# - argparse (标准库)
+
+# 可选：如果需要更详细的系统信息
+# distro==1.8.0  # Linux发行版信息检测

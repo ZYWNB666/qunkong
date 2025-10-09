@@ -1,5 +1,5 @@
 """
-Qunkong Agent 客户端
+Qunkong Agent 客户端 - Linux专用版本
 """
 import asyncio
 import websockets
@@ -18,12 +18,11 @@ import struct
 import fcntl
 import signal
 import threading
+import queue
+import requests
 import time
 import sys
 import tempfile
-import secrets
-import queue
-import requests
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -32,10 +31,18 @@ logger = logging.getLogger(__name__)
 class QunkongAgent:
     """Qunkong Agent 客户端"""
     
-    def __init__(self, server_host="localhost", server_port=8765, agent_id=None):
+    def __init__(self, server_host="localhost", server_port=8765, agent_id=None, log_level="INFO"):
         self.server_host = server_host
         self.server_port = server_port
         self.hostname = platform.node()
+        
+        # 设置日志级别
+        if log_level == "DEBUG":
+            logger.setLevel(logging.DEBUG)
+        elif log_level == "INFO":
+            logger.setLevel(logging.INFO)
+        elif log_level == "WARNING":
+            logger.setLevel(logging.WARNING)
         
         # 获取内网IP
         self.ip = self.get_local_ip()  # 内网IP
@@ -52,6 +59,8 @@ class QunkongAgent:
         # 终端会话管理 - PTY终端
         self.terminal_sessions = {}  # session_id -> {'pty_fd': fd, 'process': process, 'thread': thread, 'output_queue': queue}
         self.current_directory = os.path.expanduser("~")  # 当前工作目录
+        # 命令缓冲区，用于记录完整的用户命令
+        self.command_buffers = {}  # session_id -> current_command_buffer
 
     def get_local_ip(self):
         """获取本地内网IP地址"""
@@ -140,8 +149,8 @@ class QunkongAgent:
 
             # 基本信息
             system_info = {
-                'platform': platform.platform(),
-                'system': platform.system(),
+                'platform': 'Linux',
+                'system': 'Linux',
                 'release': platform.release(),
                 'version': platform.version(),
                 'machine': platform.machine(),
@@ -162,40 +171,15 @@ class QunkongAgent:
                     'cpu_times': psutil.cpu_times()._asdict()
                 }
 
-                # 根据系统类型获取更详细的CPU信息
-                if platform.system() == "Windows":
-                    try:
-                        # Windows系统获取CPU型号
-                        result = subprocess.run(['wmic', 'cpu', 'get', 'name', '/format:list'],
-                                              capture_output=True, text=True, timeout=5)
-                        if result.returncode == 0:
-                            for line in result.stdout.split('\n'):
-                                if line.startswith('Name='):
-                                    cpu_info['model'] = line.split('=', 1)[1].strip()
-                                    break
-                        
-                        # 如果wmic失败，尝试从注册表获取
-                        if not cpu_info.get('model'):
-                            try:
-                                import winreg
-                                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
-                                                   r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
-                                cpu_info['model'] = winreg.QueryValueEx(key, "ProcessorNameString")[0]
-                                winreg.CloseKey(key)
-                            except:
-                                pass
-                    except:
-                        pass
-                else:
-                    try:
-                        # Linux系统获取CPU型号
-                        with open('/proc/cpuinfo', 'r') as f:
-                            for line in f:
-                                if line.startswith('model name'):
-                                    cpu_info['model'] = line.split(':')[1].strip()
-                                    break
-                    except:
-                        pass
+                # 获取CPU型号信息
+                try:
+                    with open('/proc/cpuinfo', 'r') as f:
+                        for line in f:
+                            if line.startswith('model name'):
+                                cpu_info['model'] = line.split(':')[1].strip()
+                                break
+                except:
+                    pass
 
             except Exception as e:
                 logger.warning("获取CPU信息失败: {}".format(e))
@@ -270,15 +254,10 @@ class QunkongAgent:
                 logger.warning("获取网络信息失败: {}".format(e))
                 network_info = []
 
-            # 系统特定信息
+            # 系统特定信息 - 只支持Linux
             system_specific = {}
             try:
-                if platform.system() == "Windows":
-                    # Windows特定信息
-                    system_specific = self._get_windows_info()
-                else:
-                    # Linux/Unix特定信息
-                    system_specific = self._get_linux_info()
+                system_specific = self._get_linux_info()
             except Exception as e:
                 logger.warning("获取系统特定信息失败: {}".format(e))
                 system_specific = {}
@@ -286,7 +265,7 @@ class QunkongAgent:
             # 格式化系统信息以匹配前端显示需求
             formatted_system_info = {
                 # 操作系统信息
-                'os': "{} {}".format(system_info.get('system', 'Unknown'), system_info.get('release', '')),
+                'os': "Linux {}".format(system_info.get('release', '')),
                 'kernel': system_info.get('version', 'Unknown'),
                 'architecture': system_info.get('architecture', 'Unknown'),
                 'hostname': system_info.get('hostname', 'Unknown'),
@@ -324,48 +303,8 @@ class QunkongAgent:
             logger.error("获取系统信息失败: {}".format(e))
             return {}
 
-    def _get_windows_info(self):
-        """获取Windows特定信息"""
-        import subprocess
-        import os
-
-        info = {}
-        try:
-            # 获取Windows版本信息
-            result = subprocess.run(['ver'], capture_output=True, text=True, shell=True, timeout=5)
-            if result.returncode == 0:
-                info['windows_version'] = result.stdout.strip()
-        except:
-            pass
-
-        try:
-            # 获取计算机信息
-            result = subprocess.run(['systeminfo'], capture_output=True, text=True, shell=True, timeout=10)
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if 'OS Name:' in line:
-                        info['os_name'] = line.split(':', 1)[1].strip()
-                    elif 'OS Version:' in line:
-                        info['os_version'] = line.split(':', 1)[1].strip()
-                    elif 'System Type:' in line:
-                        info['system_type'] = line.split(':', 1)[1].strip()
-                    elif 'Total Physical Memory:' in line:
-                        info['total_physical_memory'] = line.split(':', 1)[1].strip()
-        except:
-            pass
-
-        try:
-            # 获取环境变量
-            info['username'] = os.environ.get('USERNAME', 'Unknown')
-            info['computername'] = os.environ.get('COMPUTERNAME', 'Unknown')
-        except:
-            pass
-
-        return info
-
     def _get_linux_info(self):
-        """获取Linux特定信息"""
+        """获取Linux系统信息"""
         import subprocess
         import os
 
@@ -373,39 +312,32 @@ class QunkongAgent:
         try:
             # 获取Linux发行版信息
             if os.path.exists('/etc/os-release'):
-                with open('/etc/os-release', 'r') as f:
+                with open('/etc/os-release', 'r', encoding='utf-8') as f:
                     for line in f:
                         if line.startswith('PRETTY_NAME='):
+                            info['os_name'] = line.split('=', 1)[1].strip().strip('"')
+                        elif line.startswith('VERSION_ID='):
+                            info['os_version'] = line.split('=', 1)[1].strip().strip('"')
+                        elif line.startswith('ID='):
                             info['distribution'] = line.split('=', 1)[1].strip().strip('"')
-                        elif line.startswith('VERSION='):
-                            info['version'] = line.split('=', 1)[1].strip().strip('"')
-        except:
-            pass
-
-        try:
-            # 获取内核版本
+            
+            # 获取内核信息
             result = subprocess.run(['uname', '-r'], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 info['kernel_version'] = result.stdout.strip()
-        except:
-            pass
-
-        try:
-            # 获取系统负载
-            result = subprocess.run(['uptime'], capture_output=True, text=True, timeout=5)
+                
+            # 获取系统架构
+            result = subprocess.run(['uname', '-m'], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                info['uptime'] = result.stdout.strip()
-        except:
-            pass
-
-        try:
-            # 获取环境变量
+                info['architecture'] = result.stdout.strip()
+                
+            # 获取用户信息
             info['username'] = os.environ.get('USER', 'Unknown')
-            info['home'] = os.environ.get('HOME', 'Unknown')
-            info['shell'] = os.environ.get('SHELL', 'Unknown')
-        except:
-            pass
-
+            info['home'] = os.environ.get('HOME', '/root')
+            
+        except Exception as e:
+            logger.warning(f"获取Linux信息失败: {e}")
+            
         return info
 
     def _format_cpu_info(self, cpu_info):
@@ -509,47 +441,10 @@ class QunkongAgent:
     def _get_load_average(self):
         """获取系统负载"""
         try:
-            if platform.system() != "Windows":
-                load_avg = os.getloadavg()
-                return "{:.2f}, {:.2f}, {:.2f}".format(load_avg[0], load_avg[1], load_avg[2])
-            else:
-                # Windows没有load average概念，返回CPU使用率
-                cpu_percent = psutil.cpu_percent(interval=1)
-                return "CPU: {}%".format(cpu_percent)
+            load_avg = os.getloadavg()
+            return "{:.2f}, {:.2f}, {:.2f}".format(load_avg[0], load_avg[1], load_avg[2])
         except:
             return "Unknown"
-
-    def _convert_bash_to_batch(self, script):
-        """将bash脚本转换为Windows批处理脚本的基本转换"""
-        lines = script.split('\n')
-        converted_lines = ['@echo off']
-        
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-                
-            # 基本的bash到批处理转换
-            if line.startswith('echo '):
-                # echo命令保持不变，但需要处理变量
-                converted_line = line.replace('$(pwd)', '%CD%').replace('$(whoami)', '%USERNAME%')
-                # 处理bash变量引用 $VAR -> %VAR%
-                import re
-                converted_line = re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)', r'%\1%', converted_line)
-                converted_lines.append(converted_line)
-            elif '=' in line and not line.startswith('if ') and not line.startswith('for '):
-                # 变量赋值: VAR="value" -> set VAR=value
-                if '"' in line:
-                    var_name, var_value = line.split('=', 1)
-                    var_value = var_value.strip().strip('"')
-                    converted_lines.append(f'set {var_name}={var_value}')
-                else:
-                    converted_lines.append(f'set {line}')
-            else:
-                # 其他命令直接保留
-                converted_lines.append(line)
-        
-        return '\n'.join(converted_lines)
 
     async def register_with_server(self):
         """向服务器注册"""
@@ -562,7 +457,7 @@ class QunkongAgent:
             'hostname': self.hostname,
             'ip': self.ip,  # 内网IP
             'external_ip': self.external_ip,  # 外网IP
-            'platform': platform.system(),
+            'platform': 'Linux',
             'python_version': platform.python_version(),
             'system_info': system_info
         }
@@ -612,46 +507,27 @@ class QunkongAgent:
             
             # 根据脚本类型确定解释器和扩展名
             is_python = script.startswith('#!/usr/bin/env python3') or script.startswith('#!/usr/bin/python')
-            is_windows = platform.system().lower() == 'windows'
             
             if is_python:
                 # Python脚本
-                interpreter = 'python'
+                interpreter = 'python3'
                 temp_script_path = temp_script_path.replace('.sh', '.py')
             else:
-                # Shell脚本 - 对于Windows，我们尝试使用bash（如果可用）
-                if is_windows:
-                    # Windows下尝试使用bash（Git Bash, WSL等）
-                    interpreter = 'bash'
-                    temp_script_path = temp_script_path.replace('.sh', '.bat')
-                    # 如果是bash脚本，进行基本的Windows批处理转换
-                    if script.startswith('#!/bin/bash') or script.startswith('#!/bin/sh'):
-                        # 移除shebang行
-                        script_lines = script.split('\n')
-                        if script_lines[0].startswith('#!'):
-                            script = '\n'.join(script_lines[1:])
-                    
-                    # 进行基本的bash到批处理的转换
-                    script = self._convert_bash_to_batch(script)
-                else:
-                    interpreter = '/bin/bash'
-                    if not script.startswith('#!'):
-                        script = '#!/bin/bash\n' + script
+                # Shell脚本
+                interpreter = '/bin/bash'
+                if not script.startswith('#!'):
+                    script = '#!/bin/bash\n' + script
             
             # 将脚本内容写入临时文件
             with open(temp_script_path, 'w', encoding='utf-8') as f:
                 f.write(script)
             
-            # 给脚本文件添加执行权限（仅在非Windows系统）
-            if not is_windows:
-                os.chmod(temp_script_path, 0o755)
+            # 给脚本文件添加执行权限
+            os.chmod(temp_script_path, 0o755)
             
             # 构建执行命令
             if is_python:
                 cmd = [interpreter, temp_script_path]
-            elif is_windows:
-                # Windows下直接执行批处理文件
-                cmd = [temp_script_path]
             else:
                 cmd = ['/bin/bash', temp_script_path]
             
@@ -669,15 +545,13 @@ class QunkongAgent:
             logger.debug("执行命令: {}".format(' '.join(cmd)))
             
             # 执行脚本
-            # Windows下需要指定编码以避免GBK编码问题
-            encoding = 'utf-8' if not is_windows else 'gbk'
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 cwd=os.getcwd(),
-                encoding=encoding,
+                encoding='utf-8',
                 errors='replace'  # 遇到编码错误时替换为?
             )
             
@@ -855,10 +729,7 @@ class QunkongAgent:
     async def handle_restart_host(self):
         """处理重启主机命令"""
         try:
-            import platform
             import subprocess
-            
-            system_type = platform.system().lower()
             
             # 发送重启响应
             response_message = {
@@ -866,34 +737,26 @@ class QunkongAgent:
                 'agent_id': self.agent_id,
                 'restart_type': 'host',
                 'success': True,
-                'message': f'Host restart initiated on {system_type}'
+                'message': 'Host restart initiated on Linux'
             }
             await self.websocket.send(json.dumps(response_message))
             
-            logger.info("主机重启中... (系统类型: {})".format(system_type))
+            logger.info("主机重启中... (系统类型: Linux)")
             
             # 延迟一点时间让响应发送完成
             await asyncio.sleep(2)
             
-            # 根据操作系统执行重启命令
-            if system_type == 'windows':
-                # Windows重启命令
-                subprocess.run(['shutdown', '/r', '/t', '10', '/c', 'Qunkong Agent requested restart'], 
-                             check=False)
-            elif system_type in ['linux', 'darwin']:
-                # Linux/macOS重启命令
+            # 执行Linux重启命令
+            try:
+                # 尝试使用systemctl (systemd)
+                subprocess.run(['sudo', 'systemctl', 'reboot'], check=False, timeout=5)
+            except:
                 try:
-                    # 尝试使用systemctl (systemd)
-                    subprocess.run(['sudo', 'systemctl', 'reboot'], check=False, timeout=5)
+                    # 备用方案：使用reboot命令
+                    subprocess.run(['sudo', 'reboot'], check=False, timeout=5)
                 except:
-                    try:
-                        # 备用方案：使用reboot命令
-                        subprocess.run(['sudo', 'reboot'], check=False, timeout=5)
-                    except:
-                        # 最后备用方案：使用shutdown命令
-                        subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
-            else:
-                raise Exception("不支持的操作系统: {}".format(system_type))
+                    # 最后备用方案：使用shutdown命令
+                    subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
                 
         except Exception as e:
             logger.error("重启主机失败: {}".format(e))
@@ -913,11 +776,6 @@ class QunkongAgent:
     async def handle_terminal_init(self, session_id: str, cols: int = 80, rows: int = 24):
         """初始化PTY终端"""
         try:
-            # 检查是否为Windows系统
-            if platform.system().lower() == 'windows':
-                await self.send_terminal_error(session_id, "PTY终端暂不支持Windows系统，请使用Linux或macOS")
-                return
-            
             # 创建PTY
             master_fd, slave_fd = pty.openpty()
             
@@ -1105,12 +963,51 @@ class QunkongAgent:
             session = self.terminal_sessions[session_id]
             master_fd = session['master_fd']
             
-            # 调试日志
-            logger.info(f"收到终端输入 {session_id}: {repr(data)}")
+            # 初始化命令缓冲区
+            if session_id not in self.command_buffers:
+                self.command_buffers[session_id] = ""
+            
+            # 处理特殊字符
+            if data == '\r' or data == '\n':  # 回车键 - 命令执行
+                command = self.command_buffers[session_id].strip()
+                if command:
+                    logger.info(f"用户执行命令 [{session_id[:8]}...]: {command}")
+                else:
+                    logger.debug(f"用户按下回车 [{session_id[:8]}...]")
+                self.command_buffers[session_id] = ""  # 清空缓冲区
+            elif data == '\x7f':  # 退格键
+                if self.command_buffers[session_id]:
+                    self.command_buffers[session_id] = self.command_buffers[session_id][:-1]
+                logger.debug(f"用户退格 [{session_id[:8]}...], 当前输入: '{self.command_buffers[session_id]}'")
+            elif data == '\x03':  # Ctrl+C
+                logger.info(f"用户中断命令 [{session_id[:8]}...]: Ctrl+C")
+                self.command_buffers[session_id] = ""  # 清空缓冲区
+            elif data == '\x04':  # Ctrl+D
+                logger.info(f"用户发送EOF [{session_id[:8]}...]: Ctrl+D")
+            elif data == '\t':  # Tab键
+                logger.debug(f"用户按下Tab键 [{session_id[:8]}...], 当前输入: '{self.command_buffers[session_id]}'")
+            elif data.startswith('\x1b['):  # ANSI转义序列（方向键等）
+                if data == '\x1b[A':
+                    logger.debug(f"用户按上方向键 [{session_id[:8]}...]")
+                elif data == '\x1b[B':
+                    logger.debug(f"用户按下方向键 [{session_id[:8]}...]")
+                elif data == '\x1b[C':
+                    logger.debug(f"用户按右方向键 [{session_id[:8]}...]")
+                elif data == '\x1b[D':
+                    logger.debug(f"用户按左方向键 [{session_id[:8]}...]")
+                else:
+                    logger.debug(f"收到ANSI序列 [{session_id[:8]}...]: {repr(data)}")
+            elif ord(data) >= 32 and ord(data) <= 126:  # 可打印字符
+                self.command_buffers[session_id] += data
+                # 只在命令较长时记录调试日志
+                if len(self.command_buffers[session_id]) % 10 == 0:
+                    logger.debug(f"用户输入中 [{session_id[:8]}...]: '{self.command_buffers[session_id]}'")
+            else:
+                # 其他控制字符
+                logger.debug(f"收到控制字符 [{session_id[:8]}...]: {repr(data)}")
             
             # 将输入写入PTY
             bytes_written = os.write(master_fd, data.encode('utf-8'))
-            logger.info(f"写入PTY字节数: {bytes_written}")
             
         except Exception as e:
             logger.error(f"处理终端输入失败: {e}")
@@ -1182,6 +1079,11 @@ class QunkongAgent:
             
             # 删除会话
             del self.terminal_sessions[session_id]
+            
+            # 清理命令缓冲区
+            if session_id in self.command_buffers:
+                del self.command_buffers[session_id]
+                logger.debug(f"命令缓冲区已清理: {session_id}")
             
         except Exception as e:
             logger.error(f"清理终端会话失败: {e}")
@@ -1281,8 +1183,8 @@ class QunkongAgent:
                                         logger.debug("准备发送心跳")
                                         await self.send_heartbeat(websocket)
                                         consecutive_failures = 0  # 重置失败计数
-                                        logger.debug("心跳发送成功，等待3秒")
-                                        await asyncio.sleep(3)  # 每3秒发送一次心跳
+                                        logger.debug("心跳发送成功，等待5秒")
+                                        await asyncio.sleep(5)  # 每5秒发送一次心跳（降低频率）
                                     except websockets.exceptions.ConnectionClosed:
                                         logger.warning("心跳发送失败: 连接已关闭")
                                         break
@@ -1295,7 +1197,12 @@ class QunkongAgent:
                                         if consecutive_failures >= 5:
                                             logger.error("心跳连续失败5次，退出心跳任务")
                                             break
-                                        await asyncio.sleep(3)  # 失败后等待重试
+                                        # 根据失败次数调整等待时间
+                                        if consecutive_failures >= 3:
+                                            logger.warning("连续心跳失败{}次，等待10秒后重试".format(consecutive_failures))
+                                            await asyncio.sleep(10)
+                                        else:
+                                            await asyncio.sleep(5)  # 失败后等待重试
                                 logger.info("心跳循环结束")
                             except Exception as debug_e:
                                 logger.error("心跳调试过程出错: {}".format(debug_e))
@@ -1353,7 +1260,11 @@ class QunkongAgent:
             # 如果还在运行状态，准备重连
             if self.running and retry_count < max_retries:
                 retry_count += 1
+                # 使用指数退避策略，但有最大延迟限制
                 current_delay = min(retry_delay * (2 ** (retry_count - 1)), max_retry_delay)
+                # 为网络不稳定的情况增加额外延迟
+                if retry_count > 3:
+                    current_delay += 5  # 多次重连失败后增加5秒延迟
                 logger.info("将在 {} 秒后尝试重连 (第 {}/{} 次)".format(current_delay, retry_count, max_retries))
                 await asyncio.sleep(current_delay)
             elif retry_count >= max_retries:
@@ -1387,7 +1298,8 @@ def main():
     agent = QunkongAgent(
         server_host=args.server,
         server_port=args.port,
-        agent_id=args.agent_id
+        agent_id=args.agent_id,
+        log_level="DEBUG" if args.verbose else "INFO"
     )
     
     try:
