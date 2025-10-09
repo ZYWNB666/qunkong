@@ -16,7 +16,7 @@ const routes = [
   },
   {
     path: '/',
-    redirect: '/terminal'
+    redirect: '/agent-management'
   },
   {
     path: '/script-execution',
@@ -72,7 +72,7 @@ router.beforeEach((to, from, next) => {
     next('/login')
   } else if (to.path === '/login' && token) {
     // 已登录用户访问登录页，跳转到首页
-    next('/terminal')
+    next('/agent-management')
   } else {
     next()
   }
