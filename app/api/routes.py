@@ -659,14 +659,17 @@ def batch_manage_agents():
                 async def update_agents():
                     for agent_id in agent_ids:
                         try:
-                            # 查找Agent的WebSocket连接
-                            websocket_conn = None
-                            for ws, info in server_instance.agents.items():
-                                if info['agent_id'] == agent_id:
-                                    websocket_conn = ws
-                                    break
+                            # 查找Agent
+                            if agent_id not in server_instance.agents:
+                                results.append({
+                                    'agent_id': agent_id,
+                                    'success': False,
+                                    'message': 'Agent不存在'
+                                })
+                                continue
                             
-                            if not websocket_conn:
+                            agent = server_instance.agents[agent_id]
+                            if agent.status != 'ONLINE' or not agent.websocket:
                                 results.append({
                                     'agent_id': agent_id,
                                     'success': False,
@@ -683,7 +686,7 @@ def batch_manage_agents():
                                 'md5': md5
                             }
                             
-                            await websocket_conn.send(json.dumps(update_message))
+                            await agent.websocket.send(json.dumps(update_message))
                             print(f"已发送更新命令到Agent: {agent_id}, 版本: {version}")
                             
                             results.append({
