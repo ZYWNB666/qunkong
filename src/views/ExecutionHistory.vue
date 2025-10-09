@@ -33,9 +33,11 @@
         <el-row :gutter="16">
           <el-col :span="6">
             <el-select v-model="filters.category" placeholder="全部类型" clearable>
-              <el-option label="全部" value="" />
+              <el-option label="全部类型" value="" />
               <el-option label="快速执行" value="quick" />
               <el-option label="作业执行" value="job" />
+              <el-option label="批量执行" value="batch" />
+              <el-option label="定时执行" value="scheduled" />
             </el-select>
           </el-col>
           <el-col :span="6">
@@ -99,7 +101,12 @@
         
         <el-table-column prop="execution_type" label="执行方式" width="120">
           <template #default="{ row }">
-            <el-tag type="info" size="small">快速执行</el-tag>
+            <el-tag 
+              :type="getExecutionTypeStyle(row.execution_type)" 
+              size="small"
+            >
+              {{ getExecutionTypeText(row.execution_type) }}
+            </el-tag>
           </template>
         </el-table-column>
         
@@ -185,6 +192,11 @@
           </el-descriptions-item>
           <el-descriptions-item label="任务名称">
             {{ currentTask.script_name }}
+          </el-descriptions-item>
+          <el-descriptions-item label="执行类型">
+            <el-tag :type="getExecutionTypeStyle(currentTask.execution_type)">
+              {{ getExecutionTypeText(currentTask.execution_type) }}
+            </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="执行状态">
             <el-tag :type="getStatusType(currentTask.status)">
@@ -331,7 +343,18 @@ export default {
 
       // 类型筛选
       if (filters.category) {
-        // 这里可以根据实际需求添加类型筛选逻辑
+        result = result.filter(task => {
+          if (filters.category === 'quick') {
+            return task.execution_type === 'quick' || task.execution_type === 'script'
+          } else if (filters.category === 'job') {
+            return task.execution_type === 'job' || task.execution_type === 'workflow'
+          } else if (filters.category === 'batch') {
+            return task.execution_type === 'batch'
+          } else if (filters.category === 'scheduled') {
+            return task.execution_type === 'scheduled'
+          }
+          return true
+        })
       }
 
       // 日期范围筛选
@@ -506,6 +529,30 @@ export default {
       }
     }
 
+    const getExecutionTypeText = (executionType) => {
+      const typeMap = {
+        'quick': '快速执行',
+        'script': '快速执行',
+        'job': '作业执行',
+        'workflow': '作业执行',
+        'batch': '批量执行',
+        'scheduled': '定时执行'
+      }
+      return typeMap[executionType] || '未知类型'
+    }
+
+    const getExecutionTypeStyle = (executionType) => {
+      const styleMap = {
+        'quick': 'primary',
+        'script': 'primary',
+        'job': 'success',
+        'workflow': 'success',
+        'batch': 'warning',
+        'scheduled': 'info'
+      }
+      return styleMap[executionType] || 'info'
+    }
+
     const getStatusType = (status) => {
       const statusMap = {
         'PENDING': 'info',
@@ -592,6 +639,8 @@ export default {
       viewTaskDetails,
       stopTask,
       retryTask,
+      getExecutionTypeText,
+      getExecutionTypeStyle,
       getStatusType,
       getStatusText,
       formatDateTime,
