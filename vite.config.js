@@ -19,7 +19,9 @@ export default defineConfig({
     __WEBSOCKET_HOST__: JSON.stringify(config.websocket.host),
     __WEBSOCKET_PORT__: JSON.stringify(config.websocket.port),
     __API_HOST__: JSON.stringify(config.api.host),
-    __API_PORT__: JSON.stringify(config.api.port)
+    __API_PORT__: JSON.stringify(config.api.port),
+    // Monaco Editor 本地配置
+    MONACO_EDITOR_BASE_URL: JSON.stringify('/monaco-editor')
   },
   // 使用环境变量前缀 VITE_
   envPrefix: 'VITE_',
@@ -35,5 +37,7 @@ export default defineConfig({
         }
       }
     }
-  }
+  },
+  // 静态资源处理
+  assetsInclude: ['**/*.wasm']
 })

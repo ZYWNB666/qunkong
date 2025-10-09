@@ -4,6 +4,8 @@ import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
+// 导入Monaco Editor配置
+import './utils/monaco-config.js'
 
 const app = createApp(App)
 
