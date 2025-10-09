@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Qunkong Agent 客户端 - Linux专用版本
 """
