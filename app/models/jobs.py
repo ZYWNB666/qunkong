@@ -26,6 +26,7 @@ class JobManager:
                     id VARCHAR(64) PRIMARY KEY,
                     name VARCHAR(255) NOT NULL,
                     description TEXT,
+                    project_id INT NOT NULL,
                     category VARCHAR(50) DEFAULT 'custom',
                     tags JSON,
                     steps JSON NOT NULL,
@@ -39,7 +40,8 @@ class JobManager:
                     INDEX idx_name (name),
                     INDEX idx_category (category),
                     INDEX idx_created_by (created_by),
-                    INDEX idx_created_at (created_at)
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -50,6 +52,7 @@ class JobManager:
                     template_id VARCHAR(64),
                     name VARCHAR(255) NOT NULL,
                     description TEXT,
+                    project_id INT NOT NULL,
                     status VARCHAR(20) DEFAULT 'PENDING',
                     priority INT DEFAULT 5,
                     params JSON,
@@ -71,7 +74,8 @@ class JobManager:
                     INDEX idx_status (status),
                     INDEX idx_priority (priority),
                     INDEX idx_created_by (created_by),
-                    INDEX idx_created_at (created_at)
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -80,6 +84,7 @@ class JobManager:
                 CREATE TABLE IF NOT EXISTS job_step_executions (
                     id VARCHAR(64) PRIMARY KEY,
                     job_instance_id VARCHAR(64) NOT NULL,
+                    project_id INT NOT NULL,
                     step_index INT NOT NULL,
                     step_name VARCHAR(255) NOT NULL,
                     step_type VARCHAR(50) NOT NULL,
@@ -95,7 +100,8 @@ class JobManager:
                     INDEX idx_job_instance_id (job_instance_id),
                     INDEX idx_step_index (step_index),
                     INDEX idx_status (status),
-                    INDEX idx_task_id (task_id)
+                    INDEX idx_task_id (task_id),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -127,8 +133,9 @@ class JobManager:
             
             conn.close()
             
-            # 创建默认作业模板
-            self.create_default_templates()
+            # 注意：默认模板需要属于某个项目，暂不自动创建
+            # 用户可以在创建项目后手动创建模板
+            print("作业表初始化成功")
             
         except Exception as e:
             print(f"初始化作业表失败: {e}")

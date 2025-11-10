@@ -5,7 +5,7 @@ import hashlib
 import secrets
 import jwt
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from app.models import DatabaseManager
 
 class AuthManager:
@@ -372,17 +372,216 @@ class AuthManager:
         try:
             conn = self.db._get_connection()
             cursor = conn.cursor()
-            
+
             cursor.execute('''
-                DELETE FROM user_sessions 
+                DELETE FROM user_sessions
                 WHERE expires_at < NOW() OR is_active = FALSE
             ''')
-            
+
             deleted_count = cursor.rowcount
             conn.close()
-            
+
             return deleted_count
-            
+
         except Exception as e:
             print(f"清理过期会话失败: {e}")
+            return 0
+
+    def get_all_users(self, role: str = None, is_active: bool = None,
+                     search: str = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """获取所有用户列表"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            # 构建查询条件
+            where_conditions = []
+            where_params = []
+
+            if role:
+                where_conditions.append('role = %s')
+                where_params.append(role)
+
+            if is_active is not None:
+                where_conditions.append('is_active = %s')
+                where_params.append(is_active)
+
+            if search:
+                where_conditions.append('(username LIKE %s OR email LIKE %s)')
+                search_pattern = f'%{search}%'
+                where_params.extend([search_pattern, search_pattern])
+
+            where_clause = ' AND '.join(where_conditions) if where_conditions else '1=1'
+            where_params.extend([limit, offset])
+
+            cursor.execute(f'''
+                SELECT id, username, email, role, is_active,
+                       created_at, updated_at, last_login, login_count
+                FROM users
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            ''', tuple(where_params))
+
+            users = cursor.fetchall()
+            conn.close()
+
+            result = []
+            for user in users:
+                result.append({
+                    'id': user['id'],
+                    'username': user['username'],
+                    'email': user['email'],
+                    'role': user['role'],
+                    'is_active': user['is_active'],
+                    'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+                    'updated_at': user['updated_at'].isoformat() if user['updated_at'] else None,
+                    'last_login': user['last_login'].isoformat() if user['last_login'] else None,
+                    'login_count': user['login_count']
+                })
+
+            return result
+
+        except Exception as e:
+            print(f"获取用户列表失败: {e}")
+            return []
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """根据ID获取用户信息"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT id, username, email, role, is_active,
+                       created_at, updated_at, last_login, login_count
+                FROM users
+                WHERE id = %s
+            ''', (user_id,))
+
+            user = cursor.fetchone()
+            conn.close()
+
+            if user:
+                return {
+                    'id': user['id'],
+                    'username': user['username'],
+                    'email': user['email'],
+                    'role': user['role'],
+                    'is_active': user['is_active'],
+                    'created_at': user['created_at'].isoformat() if user['created_at'] else None,
+                    'updated_at': user['updated_at'].isoformat() if user['updated_at'] else None,
+                    'last_login': user['last_login'].isoformat() if user['last_login'] else None,
+                    'login_count': user['login_count']
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"获取用户信息失败: {e}")
+            return None
+
+    def update_user(self, user_id: int, **kwargs) -> bool:
+        """更新用户信息"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            # 构建更新SQL
+            update_fields = []
+            update_values = []
+
+            # 允许更新的字段
+            allowed_fields = ['username', 'email', 'role', 'is_active']
+
+            for field in allowed_fields:
+                if field in kwargs:
+                    # 如果是更新用户名或邮箱，需要检查是否已存在
+                    if field in ['username', 'email']:
+                        cursor.execute(f'SELECT id FROM users WHERE {field} = %s AND id != %s',
+                                      (kwargs[field], user_id))
+                        if cursor.fetchone():
+                            conn.close()
+                            return False
+
+                    update_fields.append(f"{field} = %s")
+                    update_values.append(kwargs[field])
+
+            if not update_fields:
+                conn.close()
+                return False
+
+            update_values.append(user_id)
+            sql = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
+
+            cursor.execute(sql, tuple(update_values))
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"更新用户信息失败: {e}")
+            return False
+
+    def change_user_password(self, user_id: int, new_password: str) -> bool:
+        """修改用户密码"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            # 生成新的密码哈希
+            password_hash, salt = self.hash_password(new_password)
+
+            cursor.execute('''
+                UPDATE users
+                SET password_hash = %s, salt = %s
+                WHERE id = %s
+            ''', (password_hash, salt, user_id))
+
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"修改用户密码失败: {e}")
+            return False
+
+    def delete_user(self, user_id: int) -> bool:
+        """删除用户（软删除，将is_active设置为False）"""
+        try:
+            return self.update_user(user_id, is_active=False)
+        except Exception as e:
+            print(f"删除用户失败: {e}")
+            return False
+
+    def count_users(self, role: str = None, is_active: bool = None) -> int:
+        """统计用户数量"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            where_conditions = []
+            where_params = []
+
+            if role:
+                where_conditions.append('role = %s')
+                where_params.append(role)
+
+            if is_active is not None:
+                where_conditions.append('is_active = %s')
+                where_params.append(is_active)
+
+            where_clause = ' AND '.join(where_conditions) if where_conditions else '1=1'
+
+            cursor.execute(f'''
+                SELECT COUNT(*) as count
+                FROM users
+                WHERE {where_clause}
+            ''', tuple(where_params))
+
+            result = cursor.fetchone()
+            conn.close()
+
+            return result['count'] if result else 0
+
+        except Exception as e:
+            print(f"统计用户数量失败: {e}")
             return 0

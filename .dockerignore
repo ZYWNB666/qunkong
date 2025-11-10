@@ -1,47 +1,54 @@
-# Git
+# 忽略node_modules（会在容器内重新安装）
+node_modules
+npm-debug.log
+
+# 忽略构建输出
+dist
+build
+
+# 忽略版本控制
 .git
 .gitignore
 
-# Documentation
-README.md
-docs/
-*.md
-
-# Node modules
-node_modules
-npm-debug.log*
-
-# Python cache
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-.coverage
-.pytest_cache
-
-# IDE
+# 忽略IDE配置
 .vscode
 .idea
 *.swp
 *.swo
 
-# OS
+# 忽略环境配置
+.env
+.env.local
+.env.*.local
+
+# 忽略测试和文档
+test
+tests
+*.md
+docs
+
+# 忽略日志
+logs
+*.log
+
+# 忽略Python相关（前端构建不需要）
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info
+.venv
+venv
+ENV
+
+# 忽略临时文件
+*.tmp
+*.temp
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-logs/
-
-# Temporary files
-*.tmp
-*.temp
-
-# Build artifacts
-dist/
-build/
-
-# Config (will be mounted)
-config/database.conf
+# 忽略Docker相关
+docker-compose*.yml
+Dockerfile*

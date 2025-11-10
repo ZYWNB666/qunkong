@@ -9,7 +9,6 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from flask import Blueprint, jsonify, request
 from app.models import DatabaseManager
 from app.api.auth import require_auth, require_permission
-from dataclasses import asdict
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +28,9 @@ def init_api(server):
 def get_tasks():
     """获取执行历史"""
     if server_instance:
-        # 从数据库获取执行历史
-        history = server_instance.db.get_execution_history(limit=100)
+        # 从数据库获取执行历史（按项目过滤）
+        project_id = request.args.get('project_id', type=int)
+        history = server_instance.db.get_execution_history(project_id=project_id, limit=100)
         
         # 添加内存中正在执行的任务
         running_tasks = []
@@ -59,8 +59,19 @@ def get_tasks():
         all_tasks = history + running_tasks
         all_tasks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         
-        return jsonify(all_tasks)
-    return jsonify([])
+        # 统一字段名，将 'id' 改为 'task_id'，添加 agent_count，统一状态为小写
+        formatted_tasks = []
+        for task in all_tasks:
+            formatted_task = dict(task)
+            formatted_task['task_id'] = formatted_task.pop('id', '')
+            formatted_task['agent_count'] = len(formatted_task.get('target_hosts', []))
+            # 统一状态为小写
+            if 'status' in formatted_task:
+                formatted_task['status'] = formatted_task['status'].lower()
+            formatted_tasks.append(formatted_task)
+        
+        return jsonify({'tasks': formatted_tasks})
+    return jsonify({'tasks': []})
 
 @api_bp.route('/tasks', methods=['POST'])
 @require_auth
@@ -151,8 +162,26 @@ def get_servers():
 def get_agents():
     """获取Agent列表"""
     if server_instance:
-        return jsonify([asdict(agent) for agent in server_instance.agents.values()])
-    return jsonify([])
+        agents_list = []
+        for agent in server_instance.agents.values():
+            # 手动构建字典，避免序列化 WebSocket 对象
+            agent_dict = {
+                'id': agent.id,
+                'hostname': agent.hostname,
+                'ip_address': agent.ip,  # Agent对象的属性名是ip，不是ip_address
+                'os_type': getattr(agent, 'os_type', 'unknown'),
+                'os_version': getattr(agent, 'os_version', ''),
+                'agent_version': getattr(agent, 'agent_version', '1.0.0'),
+                'status': agent.status.upper(),  # 统一为大写：ONLINE/OFFLINE
+                'last_heartbeat': agent.last_heartbeat,
+                'register_time': getattr(agent, 'register_time', ''),
+                'cpu_count': getattr(agent, 'cpu_count', 0),
+                'memory_total': getattr(agent, 'memory_total', 0),
+                'disk_total': getattr(agent, 'disk_total', 0)
+            }
+            agents_list.append(agent_dict)
+        return jsonify({'agents': agents_list})
+    return jsonify({'agents': []})
 
 @api_bp.route('/agents/<agent_id>', methods=['GET'])
 def get_agent_details(agent_id):
@@ -188,7 +217,8 @@ def execute_script():
             script_name=data.get('script_name', '未命名任务'),
             script_params=data.get('script_params', ''),
             timeout=data.get('timeout', 7200),
-            execution_user=data.get('execution_user', 'root')
+            execution_user=data.get('execution_user', 'root'),
+            project_id=data.get('project_id')  # 添加 project_id
         )
         
         # 异步执行任务
@@ -278,6 +308,7 @@ def stop_task(task_id):
                     'script': task.script,
                     'script_params': getattr(task, 'script_params', ''),
                     'target_hosts': task.target_hosts,
+                    'project_id': getattr(task, 'project_id', None),  # 添加 project_id
                     'status': task.status,
                     'created_at': task.created_at,
                     'started_at': task.started_at,

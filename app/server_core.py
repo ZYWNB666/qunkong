@@ -9,6 +9,7 @@ import logging
 import hashlib
 import secrets
 import time
+import base64
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
@@ -44,6 +45,7 @@ class Task:
     script_params: str = ""
     execution_user: str = "root"
     error_message: str = ""
+    project_id: Optional[int] = None  # 添加 project_id 字段
 
     def __post_init__(self):
         if self.results is None:
@@ -324,6 +326,13 @@ class QunkongServer:
         
         if task_id in self.tasks:
             task = self.tasks[task_id]
+            
+            # 添加 agent 信息到结果中
+            if agent_id in self.agents:
+                agent = self.agents[agent_id]
+                result['agent_hostname'] = agent.hostname
+                result['agent_ip'] = agent.ip
+            
             task.results[agent_id] = result
             
             # 检查是否所有目标主机都已完成
@@ -342,6 +351,7 @@ class QunkongServer:
                     'script': task.script,
                     'script_params': getattr(task, 'script_params', ''),
                     'target_hosts': task.target_hosts,
+                    'project_id': getattr(task, 'project_id', None),  # 添加 project_id
                     'status': task.status,
                     'created_at': task.created_at,
                     'started_at': task.started_at,
@@ -542,7 +552,7 @@ class QunkongServer:
             logger.error(f"创建PTY终端会话失败: {e}")
             return None
 
-    async def handle_pty_terminal_input(self, session_id: str, input_data: str):
+    async def handle_pty_terminal_input(self, session_id: str, input_data: str, is_binary: bool = False):
         """处理PTY终端输入"""
         try:
             session = self.terminal_manager.get_session(session_id)
@@ -563,7 +573,8 @@ class QunkongServer:
             input_message = {
                 'type': 'terminal_input',
                 'session_id': session_id,
-                'data': input_data
+                'data': input_data,
+                'is_binary': is_binary
             }
             await agent.websocket.send(json.dumps(input_message))
             
@@ -604,6 +615,7 @@ class QunkongServer:
         try:
             session_id = message.get('session_id')
             data = message.get('data', '')
+            is_binary = message.get('is_binary', False)
             
             session = self.terminal_manager.get_session(session_id)
             if not session:
@@ -612,13 +624,24 @@ class QunkongServer:
             
             # 转发数据到前端WebSocket
             if session.websocket:
-                response = {
-                    'type': 'terminal_data',
-                    'session_id': session_id,
-                    'data': data
-                }
                 try:
-                    await session.websocket.send(json.dumps(response))
+                    if is_binary:
+                        # 二进制数据直接发送（ZMODEM协议，Agent应该发送base64编码的数据）
+                        response = {
+                            'type': 'terminal_data',
+                            'session_id': session_id,
+                            'data': data,
+                            'is_binary': True
+                        }
+                        await session.websocket.send(json.dumps(response))
+                    else:
+                        # 文本数据
+                        response = {
+                            'type': 'terminal_data',
+                            'session_id': session_id,
+                            'data': data
+                        }
+                        await session.websocket.send(json.dumps(response))
                 except Exception as e:
                     logger.error(f"向前端发送PTY终端数据失败: {e}")
                     # 会话可能已断开，清理会话
@@ -753,36 +776,46 @@ class QunkongServer:
             try:
                 async for message in websocket:
                     try:
-                        # 支持二进制数据（键盘输入）
+                        # 支持二进制数据（ZMODEM文件传输）
                         if isinstance(message, bytes):
-                            # 处理二进制终端输入
-                            input_data = message.decode('utf-8', errors='replace')
-                            await self.handle_pty_terminal_input(session_id, input_data)
+                            # 处理二进制终端输入（ZMODEM数据）
+                            logger.debug(f"收到二进制WebSocket消息: {len(message)} 字节")
+                            input_data = base64.b64encode(message).decode('ascii')
+                            await self.handle_pty_terminal_input(session_id, input_data, is_binary=True)
                         else:
-                            # 处理JSON消息
-                            data = json.loads(message)
-                            msg_type = data.get('type')
-                            
-                            if msg_type == 'terminal_input':
-                                # 处理终端输入
-                                input_data = data.get('data', '')
-                                await self.handle_pty_terminal_input(session_id, input_data)
-                            elif msg_type == 'terminal_resize':
-                                # 调整终端大小
-                                cols = data.get('cols', 80)
-                                rows = data.get('rows', 24)
-                                await self.handle_pty_terminal_resize(session_id, cols, rows)
-                            elif msg_type == 'terminal_ping':
-                                # 心跳保持
-                                self.terminal_manager.update_activity(session_id)
-                                pong_message = {
-                                    'type': 'terminal_pong',
-                                    'timestamp': datetime.now().isoformat()
-                                }
-                                await websocket.send(json.dumps(pong_message))
+                            # 尝试解析JSON消息
+                            try:
+                                data = json.loads(message)
+                                
+                                # 检查是否是字典类型（有效的JSON对象）
+                                if isinstance(data, dict):
+                                    msg_type = data.get('type')
+                                    
+                                    if msg_type == 'terminal_input':
+                                        # 处理终端输入
+                                        input_data = data.get('data', '')
+                                        is_binary = data.get('is_binary', False)
+                                        await self.handle_pty_terminal_input(session_id, input_data, is_binary=is_binary)
+                                    elif msg_type == 'terminal_resize':
+                                        # 调整终端大小
+                                        cols = data.get('cols', 80)
+                                        rows = data.get('rows', 24)
+                                        await self.handle_pty_terminal_resize(session_id, cols, rows)
+                                    elif msg_type == 'terminal_ping':
+                                        # 心跳保持
+                                        self.terminal_manager.update_activity(session_id)
+                                        pong_message = {
+                                            'type': 'terminal_pong',
+                                            'timestamp': datetime.now().isoformat()
+                                        }
+                                        await websocket.send(json.dumps(pong_message))
+                                else:
+                                    # JSON解析成功但不是字典（比如数字、字符串），作为终端输入
+                                    await self.handle_pty_terminal_input(session_id, message, is_binary=False)
+                            except json.JSONDecodeError:
+                                # 不是JSON格式，直接作为终端输入处理
+                                await self.handle_pty_terminal_input(session_id, message, is_binary=False)
                         
-                    except json.JSONDecodeError:
-                        logger.error(f"收到无效的JSON消息: {message}")
                     except Exception as e:
                         logger.error(f"处理PTY终端WebSocket消息失败: {e}")
                         
@@ -1007,6 +1040,7 @@ class QunkongServer:
             'script': task.script,
             'script_params': getattr(task, 'script_params', ''),
             'target_hosts': task.target_hosts,
+            'project_id': getattr(task, 'project_id', None),  # 添加 project_id
             'status': task.status,
             'created_at': task.created_at,
             'started_at': task.started_at,
@@ -1038,6 +1072,7 @@ class QunkongServer:
             'script': task.script,
             'script_params': getattr(task, 'script_params', ''),
             'target_hosts': task.target_hosts,
+            'project_id': getattr(task, 'project_id', None),  # 添加 project_id
             'status': task.status,
             'created_at': task.created_at,
             'started_at': task.started_at,

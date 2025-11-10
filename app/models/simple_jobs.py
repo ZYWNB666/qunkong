@@ -27,6 +27,7 @@ class SimpleJobManager:
                     id VARCHAR(64) PRIMARY KEY,
                     name VARCHAR(255) NOT NULL,
                     description TEXT,
+                    project_id INT NOT NULL,
                     target_agent_id VARCHAR(64),
                     env_vars JSON,
                     created_by INT,
@@ -34,7 +35,8 @@ class SimpleJobManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX idx_name (name),
                     INDEX idx_target_agent (target_agent_id),
-                    INDEX idx_created_at (created_at)
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -60,6 +62,7 @@ class SimpleJobManager:
                 CREATE TABLE IF NOT EXISTS simple_job_executions (
                     id VARCHAR(64) PRIMARY KEY,
                     job_id VARCHAR(64) NOT NULL,
+                    project_id INT NOT NULL,
                     status VARCHAR(20) DEFAULT 'PENDING',
                     current_step INT DEFAULT 0,
                     total_steps INT DEFAULT 0,
@@ -70,19 +73,11 @@ class SimpleJobManager:
                     FOREIGN KEY (job_id) REFERENCES simple_jobs (id) ON DELETE CASCADE,
                     INDEX idx_job_id (job_id),
                     INDEX idx_status (status),
-                    INDEX idx_started_at (started_at)
+                    INDEX idx_started_at (started_at),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
-            # 检查并添加target_agent_id字段（用于数据库迁移）
-            try:
-                cursor.execute("SHOW COLUMNS FROM simple_job_steps LIKE 'target_agent_id'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE simple_job_steps ADD COLUMN target_agent_id VARCHAR(64) AFTER script_content")
-                    cursor.execute("ALTER TABLE simple_job_steps ADD INDEX idx_target_agent (target_agent_id)")
-                    print("数据库迁移：添加simple_job_steps.target_agent_id字段成功")
-            except Exception as e:
-                print(f"添加target_agent_id字段失败（可能已存在）: {e}")
             
             conn.close()
             print("简单作业表初始化成功")
@@ -91,7 +86,7 @@ class SimpleJobManager:
             print(f"初始化作业表失败: {e}")
             raise
     
-    def create_job(self, name: str, description: str, target_agent_id: str, 
+    def create_job(self, name: str, description: str, project_id: int, target_agent_id: str, 
                    env_vars: Dict = None, created_by: int = None) -> str:
         """创建作业"""
         try:
@@ -101,9 +96,9 @@ class SimpleJobManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT INTO simple_jobs (id, name, description, target_agent_id, env_vars, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (job_id, name, description, target_agent_id, json.dumps(env_vars or {}), created_by))
+                INSERT INTO simple_jobs (id, name, description, project_id, target_agent_id, env_vars, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (job_id, name, description, project_id, target_agent_id, json.dumps(env_vars or {}), created_by))
             
             conn.close()
             return job_id
@@ -219,22 +214,35 @@ class SimpleJobManager:
             print(f"获取作业失败: {e}")
             return None
     
-    def get_all_jobs(self, limit: int = 100, offset: int = 0) -> List[Dict]:
+    def get_all_jobs(self, project_id: int = None, limit: int = 100, offset: int = 0) -> List[Dict]:
         """获取所有作业"""
         try:
             conn = self.db._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT j.id, j.name, j.description, j.target_agent_id, j.env_vars,
-                       j.created_by, j.created_at, j.updated_at,
-                       COUNT(s.id) as step_count
-                FROM simple_jobs j
-                LEFT JOIN simple_job_steps s ON j.id = s.job_id
-                GROUP BY j.id
-                ORDER BY j.created_at DESC
-                LIMIT %s OFFSET %s
-            ''', (limit, offset))
+            if project_id:
+                cursor.execute('''
+                    SELECT j.id, j.name, j.description, j.project_id, j.target_agent_id, j.env_vars,
+                           j.created_by, j.created_at, j.updated_at,
+                           COUNT(s.id) as step_count
+                    FROM simple_jobs j
+                    LEFT JOIN simple_job_steps s ON j.id = s.job_id
+                    WHERE j.project_id = %s
+                    GROUP BY j.id
+                    ORDER BY j.created_at DESC
+                    LIMIT %s OFFSET %s
+                ''', (project_id, limit, offset))
+            else:
+                cursor.execute('''
+                    SELECT j.id, j.name, j.description, j.project_id, j.target_agent_id, j.env_vars,
+                           j.created_by, j.created_at, j.updated_at,
+                           COUNT(s.id) as step_count
+                    FROM simple_jobs j
+                    LEFT JOIN simple_job_steps s ON j.id = s.job_id
+                    GROUP BY j.id
+                    ORDER BY j.created_at DESC
+                    LIMIT %s OFFSET %s
+                ''', (limit, offset))
             
             jobs = cursor.fetchall()
             conn.close()
@@ -345,6 +353,13 @@ class SimpleJobManager:
             conn = self.db._get_connection()
             cursor = conn.cursor()
             
+            # 获取作业的project_id
+            cursor.execute('SELECT project_id FROM simple_jobs WHERE id = %s', (job_id,))
+            job_result = cursor.fetchone()
+            if not job_result:
+                return None
+            project_id = job_result['project_id']
+            
             # 获取步骤数量
             cursor.execute('SELECT COUNT(*) as count FROM simple_job_steps WHERE job_id = %s', (job_id,))
             result = cursor.fetchone()
@@ -352,9 +367,9 @@ class SimpleJobManager:
             
             cursor.execute('''
                 INSERT INTO simple_job_executions 
-                (id, job_id, status, current_step, total_steps, execution_log)
-                VALUES (%s, %s, 'PENDING', 0, %s, %s)
-            ''', (execution_id, job_id, total_steps, json.dumps([])))
+                (id, job_id, project_id, status, current_step, total_steps, execution_log)
+                VALUES (%s, %s, %s, 'PENDING', 0, %s, %s)
+            ''', (execution_id, job_id, project_id, total_steps, json.dumps([])))
             
             conn.close()
             return execution_id
@@ -453,7 +468,7 @@ class SimpleJobManager:
             print(f"获取执行记录失败: {e}")
             return None
     
-    def get_job_executions(self, job_id: str = None, limit: int = 100) -> List[Dict]:
+    def get_job_executions(self, job_id: str = None, project_id: int = None, limit: int = 100) -> List[Dict]:
         """获取作业执行历史"""
         try:
             conn = self.db._get_connection()
@@ -468,6 +483,15 @@ class SimpleJobManager:
                     ORDER BY e.started_at DESC
                     LIMIT %s
                 ''', (job_id, limit))
+            elif project_id:
+                cursor.execute('''
+                    SELECT e.*, j.name as job_name
+                    FROM simple_job_executions e
+                    JOIN simple_jobs j ON e.job_id = j.id
+                    WHERE e.project_id = %s
+                    ORDER BY e.started_at DESC
+                    LIMIT %s
+                ''', (project_id, limit))
             else:
                 cursor.execute('''
                     SELECT e.*, j.name as job_name
@@ -485,6 +509,7 @@ class SimpleJobManager:
                     'id': ex['id'],
                     'job_id': ex['job_id'],
                     'job_name': ex['job_name'],
+                    'project_id': ex.get('project_id'),
                     'status': ex['status'],
                     'current_step': ex['current_step'],
                     'total_steps': ex['total_steps'],

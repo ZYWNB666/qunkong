@@ -1,9 +1,9 @@
 import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import react from '@vitejs/plugin-react'
 import config from './config.js'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [react()],
   server: {
     host: config.server.host,
     port: config.server.port,
@@ -27,13 +27,14 @@ export default defineConfig({
   envPrefix: 'VITE_',
   // Monaco Editor 优化配置
   optimizeDeps: {
-    include: ['monaco-editor', '@guolao/vue-monaco-editor']
+    include: ['monaco-editor', '@monaco-editor/react']
   },
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
-          monaco: ['monaco-editor']
+          monaco: ['monaco-editor'],
+          antd: ['antd', '@ant-design/icons']
         }
       }
     }

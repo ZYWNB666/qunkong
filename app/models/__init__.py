@@ -63,6 +63,7 @@ class DatabaseManager:
                     ip_address VARCHAR(45) NOT NULL,
                     external_ip VARCHAR(45) DEFAULT '',
                     status VARCHAR(20) DEFAULT 'OFFLINE',
+                    project_id INT,
                     last_heartbeat DATETIME,
                     register_time DATETIME,
                     websocket_info JSON,
@@ -72,19 +73,11 @@ class DatabaseManager:
                     INDEX idx_ip_address (ip_address),
                     INDEX idx_external_ip (external_ip),
                     INDEX idx_status (status),
-                    INDEX idx_last_heartbeat (last_heartbeat)
+                    INDEX idx_last_heartbeat (last_heartbeat),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
-            # 检查并添加external_ip字段（用于数据库迁移）
-            try:
-                cursor.execute("SHOW COLUMNS FROM agents LIKE 'external_ip'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE agents ADD COLUMN external_ip VARCHAR(45) DEFAULT '' AFTER ip_address")
-                    cursor.execute("ALTER TABLE agents ADD INDEX idx_external_ip (external_ip)")
-                    print("数据库迁移：添加external_ip字段成功")
-            except Exception as e:
-                print(f"添加external_ip字段失败（可能已存在）: {e}")
             
             # 创建执行历史表
             cursor.execute('''
@@ -94,6 +87,7 @@ class DatabaseManager:
                     script_content LONGTEXT,
                     script_params TEXT,
                     target_hosts JSON,
+                    project_id INT,
                     status VARCHAR(20) DEFAULT 'PENDING',
                     created_at DATETIME,
                     started_at DATETIME,
@@ -107,7 +101,8 @@ class DatabaseManager:
                     INDEX idx_script_name (script_name),
                     INDEX idx_status (status),
                     INDEX idx_created_at (created_at),
-                    INDEX idx_execution_user (execution_user)
+                    INDEX idx_execution_user (execution_user),
+                    INDEX idx_project_id (project_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -156,14 +151,15 @@ class DatabaseManager:
             cursor.execute('''
                 INSERT INTO execution_history 
                 (id, script_name, script_content, script_params, target_hosts, 
-                 status, created_at, started_at, completed_at, timeout, 
+                 project_id, status, created_at, started_at, completed_at, timeout, 
                  execution_user, results, error_message)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 script_name = VALUES(script_name),
                 script_content = VALUES(script_content),
                 script_params = VALUES(script_params),
                 target_hosts = VALUES(target_hosts),
+                project_id = VALUES(project_id),
                 status = VALUES(status),
                 started_at = VALUES(started_at),
                 completed_at = VALUES(completed_at),
@@ -177,6 +173,7 @@ class DatabaseManager:
                 task_data.get('script'),
                 task_data.get('script_params', ''),
                 json.dumps(task_data.get('target_hosts', [])),
+                task_data.get('project_id'),  # 添加 project_id
                 task_data.get('status'),
                 convert_datetime(task_data.get('created_at')),
                 convert_datetime(task_data.get('started_at')),
@@ -193,20 +190,31 @@ class DatabaseManager:
             print(f"保存执行历史失败: {e}")
             return False
     
-    def get_execution_history(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_execution_history(self, project_id: int = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """获取执行历史"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT id, script_name, script_content, script_params, target_hosts,
-                       status, created_at, started_at, completed_at, timeout,
-                       execution_user, results, error_message
-                FROM execution_history
-                ORDER BY created_at DESC
-                LIMIT %s OFFSET %s
-            ''', (limit, offset))
+            if project_id:
+                cursor.execute('''
+                    SELECT id, script_name, script_content, script_params, target_hosts,
+                           status, created_at, started_at, completed_at, timeout,
+                           execution_user, results, error_message, project_id
+                    FROM execution_history
+                    WHERE project_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                ''', (project_id, limit, offset))
+            else:
+                cursor.execute('''
+                    SELECT id, script_name, script_content, script_params, target_hosts,
+                           status, created_at, started_at, completed_at, timeout,
+                           execution_user, results, error_message, project_id
+                    FROM execution_history
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                ''', (limit, offset))
             
             rows = cursor.fetchall()
             conn.close()
@@ -224,6 +232,7 @@ class DatabaseManager:
                     'script_content': row['script_content'],  # 同时提供script_content别名
                     'script_params': row['script_params'],
                     'target_hosts': target_hosts,
+                    'project_id': row.get('project_id'),  # 添加project_id字段
                     'status': row['status'],
                     'created_at': row['created_at'].isoformat() if row['created_at'] else None,
                     'started_at': row['started_at'].isoformat() if row['started_at'] else None,

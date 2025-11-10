@@ -21,23 +21,22 @@ services:
       timeout: 10s
       retries: 3
 
-  # 前端服务
+  # 前端服务（生产模式）
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL=http://localhost:5000
+        - VITE_WS_URL=ws://localhost:8765
     container_name: qunkong-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3000:80"
     depends_on:
       - backend
-    environment:
-      - VITE_API_URL=http://localhost:5000
-      - VITE_WS_URL=ws://localhost:8765
-    volumes:
-      - ./src:/app/src
-      - ./public:/app/public
-      - /app/node_modules
-    stdin_open: true
-    tty: true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

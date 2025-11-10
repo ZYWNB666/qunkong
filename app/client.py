@@ -24,6 +24,7 @@ import requests
 import time
 import sys
 import tempfile
+import base64
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -645,8 +646,12 @@ class QunkongAgent:
                 # 处理终端输入
                 session_id = data.get('session_id')
                 input_data = data.get('data', '')
-                logger.debug(f"收到终端输入: {session_id}")
-                await self.handle_terminal_input(session_id, input_data)
+                is_binary = data.get('is_binary', False)
+                if is_binary:
+                    logger.debug(f"收到ZMODEM二进制输入: {session_id} ({len(input_data)} bytes base64)")
+                else:
+                    logger.debug(f"收到终端输入: {session_id}")
+                await self.handle_terminal_input(session_id, input_data, is_binary=is_binary)
             elif msg_type == 'terminal_resize':
                 # 调整终端大小
                 session_id = data.get('session_id')
@@ -1053,21 +1058,104 @@ class QunkongAgent:
     def pty_read_thread(self, session_id, master_fd, output_queue):
         """PTY读取线程 - 将PTY输出放入队列"""
         try:
+            # ZMODEM会话状态标记
+            in_zmodem_session = False
+            zmodem_idle_count = 0  # 空闲计数器，用于检测ZMODEM会话结束
+            
             while session_id in self.terminal_sessions and self.terminal_sessions[session_id]['running']:
                 try:
                     # 使用select检查是否有数据可读
                     ready, _, _ = select.select([master_fd], [], [], 0.1)
                     if not ready:
+                        # 如果在ZMODEM会话中超过3秒没有数据，认为会话结束
+                        if in_zmodem_session:
+                            zmodem_idle_count += 1
+                            if zmodem_idle_count > 30:  # 3秒 (0.1s * 30)
+                                logger.info(f"ZMODEM会话超时，切换回普通模式: {session_id}")
+                                in_zmodem_session = False
+                                zmodem_idle_count = 0
                         continue
                     
                     # 读取数据
-                    data = os.read(master_fd, 1024)
+                    data = os.read(master_fd, 4096)
                     if not data:
                         break
                     
-                    # 转换为字符串
-                    output = data.decode('utf-8', errors='replace')
-                    # 移除频繁的日志记录，提升性能
+                    # 重置空闲计数器
+                    zmodem_idle_count = 0
+                    
+                    # 检测ZMODEM开始
+                    if not in_zmodem_session and self._detect_zmodem_start(data):
+                        in_zmodem_session = True
+                        logger.debug(f"检测到ZMODEM会话开始: {session_id}")
+                    
+                    # 检测ZMODEM结束
+                    if in_zmodem_session and self._detect_zmodem_end(data):
+                        logger.debug(f"检测到ZMODEM会话结束: {session_id}")
+                        
+                        # 找到OO的位置，分割数据
+                        oo_pos = data.find(b'OO')
+                        if oo_pos == -1:
+                            oo_pos = data.find(b'oo')
+                        
+                        if oo_pos >= 0:
+                            # 发送ZMODEM部分（包括OO及其后的少量字节）
+                            zmodem_end_pos = min(oo_pos + 10, len(data))  # OO后最多再包含8字节
+                            zmodem_data = data[:zmodem_end_pos]
+                            remaining_data = data[zmodem_end_pos:]
+                            
+                            # 发送ZMODEM结束数据
+                            output = {
+                                'data': base64.b64encode(zmodem_data).decode('ascii'),
+                                'is_binary': True
+                            }
+                            try:
+                                output_queue.put_nowait(output)
+                            except queue.Full:
+                                logger.warning(f"PTY输出队列已满，丢弃数据: {session_id}")
+                            
+                            # 切换回普通模式
+                            in_zmodem_session = False
+                            
+                            # 如果有剩余数据，作为普通文本发送
+                            if remaining_data:
+                                text_output = {
+                                    'data': remaining_data.decode('utf-8', errors='replace'),
+                                    'is_binary': False
+                                }
+                                try:
+                                    output_queue.put_nowait(text_output)
+                                except queue.Full:
+                                    logger.warning(f"PTY输出队列已满，丢弃数据: {session_id}")
+                            
+                            continue
+                        else:
+                            # 没找到OO（可能是多个CAN），整包发送
+                            output = {
+                                'data': base64.b64encode(data).decode('ascii'),
+                                'is_binary': True
+                            }
+                            try:
+                                output_queue.put_nowait(output)
+                            except queue.Full:
+                                logger.warning(f"PTY输出队列已满，丢弃数据: {session_id}")
+                            
+                            in_zmodem_session = False
+                            continue
+                    
+                    # 根据ZMODEM会话状态决定如何处理数据
+                    if in_zmodem_session:
+                        # ZMODEM会话中，所有数据都作为二进制
+                        output = {
+                            'data': base64.b64encode(data).decode('ascii'),
+                            'is_binary': True
+                        }
+                    else:
+                        # 普通模式，转换为文本
+                        output = {
+                            'data': data.decode('utf-8', errors='replace'),
+                            'is_binary': False
+                        }
                     
                     # 将数据放入队列
                     try:
@@ -1092,6 +1180,50 @@ class QunkongAgent:
                 except queue.Full:
                     pass
             logger.info(f"PTY读取线程结束: {session_id}")
+    
+    def _detect_zmodem_start(self, data):
+        """检测ZMODEM会话开始"""
+        # ZMODEM开始标志：rz发送 "**\x18B0" 或 sz发送 "**\x18B00"
+        # 也可能是 "**\x18B01" 等变体
+        if b'**\x18B' in data or b'**\x18b' in data:
+            return True
+        
+        # 另一种形式：多个CAN字符后跟'B'
+        if b'\x18\x18\x18\x18\x18B' in data:
+            return True
+        
+        return False
+    
+    def _detect_zmodem_end(self, data):
+        """检测ZMODEM会话结束"""
+        # ZMODEM结束标志：
+        # 1. ZFIN后跟OO - 真正的结束标记
+        # 2. 连续多个CAN字符（通常是取消或结束）
+        
+        # 检查ZFIN + OO结束序列（更精确的检测）
+        # ZFIN通常是 18 68 + 某些字节 + OO
+        if b'OO' in data:
+            # 检查OO前面是否有ZFIN相关的字节序列
+            oo_pos = data.find(b'OO')
+            # 如果OO前面至少有10个字节，检查是否包含ZFIN特征
+            if oo_pos >= 10:
+                # 检查前面是否有ZFIN标记（0x18 0x68 或类似序列）
+                prefix = data[max(0, oo_pos-20):oo_pos]
+                if b'\x18h' in prefix or b'ZFIN' in prefix:
+                    return True
+            # 如果OO在数据末尾且后面没有更多数据，也可能是结束
+            elif oo_pos == len(data) - 2:
+                return True
+        
+        # 检查连续8个或更多CAN字符（通常表示会话中止）
+        if b'\x18\x18\x18\x18\x18\x18\x18\x18' in data:
+            return True
+        
+        return False
+    
+    def _detect_zmodem_data(self, data):
+        """检测是否是ZMODEM协议数据（已废弃，保留用于兼容）"""
+        return self._detect_zmodem_start(data)
     
     async def process_pty_output_queue(self, session_id):
         """处理PTY输出队列 - 异步发送到WebSocket"""
@@ -1118,11 +1250,23 @@ class QunkongAgent:
                     
                     # 发送数据到WebSocket
                     if self.websocket:
-                        response = {
-                            'type': 'terminal_data',
-                            'session_id': session_id,
-                            'data': output
-                        }
+                        # 处理新格式：output现在是字典 {'data': ..., 'is_binary': bool}
+                        if isinstance(output, dict):
+                            response = {
+                                'type': 'terminal_data',
+                                'session_id': session_id,
+                                'data': output['data'],
+                                'is_binary': output.get('is_binary', False)
+                            }
+                        else:
+                            # 兼容旧格式（字符串）
+                            response = {
+                                'type': 'terminal_data',
+                                'session_id': session_id,
+                                'data': output,
+                                'is_binary': False
+                            }
+                        
                         try:
                             await self.websocket.send(json.dumps(response))
                         except Exception as e:
@@ -1144,7 +1288,7 @@ class QunkongAgent:
                 self.cleanup_terminal_session(session_id)
             logger.info(f"PTY输出队列处理结束: {session_id}")
     
-    async def handle_terminal_input(self, session_id: str, data: str):
+    async def handle_terminal_input(self, session_id: str, data: str, is_binary: bool = False):
         """处理终端输入"""
         if session_id not in self.terminal_sessions:
             logger.warning(f"终端会话不存在: {session_id}")
@@ -1153,6 +1297,14 @@ class QunkongAgent:
         try:
             session = self.terminal_sessions[session_id]
             master_fd = session['master_fd']
+            
+            if is_binary:
+                # 处理二进制数据（ZMODEM协议）
+                binary_data = base64.b64decode(data)
+                logger.debug(f"写入ZMODEM二进制数据到PTY: {len(binary_data)} 字节")
+                os.write(master_fd, binary_data)
+                # ZMODEM数据不记录到命令缓冲区
+                return
             
             # 初始化命令缓冲区
             if session_id not in self.command_buffers:

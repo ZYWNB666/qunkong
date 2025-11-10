@@ -30,10 +30,11 @@ def init_simple_jobs(db_manager: DatabaseManager, server):
 def get_jobs():
     """获取作业列表"""
     try:
+        project_id = request.args.get('project_id', type=int)
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
         
-        jobs = job_manager.get_all_jobs(limit, offset)
+        jobs = job_manager.get_all_jobs(project_id=project_id, limit=limit, offset=offset)
         return jsonify({'jobs': jobs, 'total': len(jobs)})
         
     except Exception as e:
@@ -66,12 +67,16 @@ def create_job():
         
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
+        project_id = data.get('project_id')
         target_agent_id = data.get('target_agent_id', '').strip()
         env_vars = data.get('env_vars', {})
         steps = data.get('steps', [])
         
         if not name:
             return jsonify({'error': '请提供作业名称'}), 400
+        
+        if not project_id:
+            return jsonify({'error': '请提供项目ID'}), 400
         
         if not target_agent_id:
             return jsonify({'error': '请选择目标Agent'}), 400
@@ -85,6 +90,7 @@ def create_job():
         job_id = job_manager.create_job(
             name=name,
             description=description,
+            project_id=project_id,
             target_agent_id=target_agent_id,
             env_vars=env_vars,
             created_by=user_id
@@ -444,9 +450,10 @@ def get_executions():
     """获取执行历史"""
     try:
         job_id = request.args.get('job_id')
+        project_id = request.args.get('project_id', type=int)
         limit = int(request.args.get('limit', 100))
         
-        executions = job_manager.get_job_executions(job_id, limit)
+        executions = job_manager.get_job_executions(job_id=job_id, project_id=project_id, limit=limit)
         return jsonify({'executions': executions, 'total': len(executions)})
         
     except Exception as e:

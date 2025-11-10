@@ -10,6 +10,9 @@ from app.api.routes import init_api
 from app.api.auth import init_auth, auth_bp
 from app.api.jobs import init_jobs, jobs_bp
 from app.api.simple_jobs import init_simple_jobs, simple_jobs_bp
+from app.api.users import init_users, users_bp
+from app.api.projects import init_projects, projects_bp
+from app.api.tenants import init_tenants, tenants_bp
 from app.server_core import QunkongServer
 
 def create_flask_app():
@@ -35,32 +38,44 @@ def main():
     """主函数"""
     # 创建WebSocket服务器
     websocket_server = QunkongServer(host="0.0.0.0", port=8765, web_port=5000)
-    
+
     # 创建Flask应用
     flask_app = create_flask_app()
-    
+
     # 初始化认证系统
     init_auth(websocket_server.db)
-    
+
+    # 初始化用户管理
+    init_users(websocket_server.db)
+
     # 初始化作业管理
     init_jobs(websocket_server.db)
-    
+
     # 初始化简单作业管理
     init_simple_jobs(websocket_server.db, websocket_server)
-    
+
+    # 初始化项目管理
+    init_projects(websocket_server.db)
+
+    # 初始化租户管理
+    init_tenants(websocket_server.db)
+
     # 注册蓝图
     flask_app.register_blueprint(auth_bp)
     flask_app.register_blueprint(jobs_bp)
     flask_app.register_blueprint(simple_jobs_bp)
-    
+    flask_app.register_blueprint(users_bp)
+    flask_app.register_blueprint(projects_bp)
+    flask_app.register_blueprint(tenants_bp)
+
     # 初始化API
     init_api(websocket_server)
-    
+
     # 在单独线程中启动WebSocket服务器
     websocket_thread = threading.Thread(target=start_websocket_server, args=(websocket_server,))
     websocket_thread.daemon = True
     websocket_thread.start()
-    
+
     # 启动Flask应用
     print("Web 服务器启动在 http://0.0.0.0:5000")
     print("Qunkong 服务器启动在 ws://0.0.0.0:8765")
