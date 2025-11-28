@@ -1213,7 +1213,17 @@ class QunkongServer:
             await self.handle_client(websocket, path)
         
         try:
-            async with websockets.serve(websocket_handler, self.host, self.port):
+            # 配置 WebSocket 参数以避免超时
+            async with websockets.serve(
+                websocket_handler, 
+                self.host, 
+                self.port,
+                ping_interval=20,  # 每20秒发送一次ping
+                ping_timeout=20,   # ping超时时间20秒
+                close_timeout=10,  # 关闭超时10秒
+                max_size=10 * 1024 * 1024,  # 最大消息大小10MB
+                compression=None   # 禁用压缩以提高性能
+            ):
                 await asyncio.Future()  # 保持运行
         finally:
             # 服务器关闭时取消任务

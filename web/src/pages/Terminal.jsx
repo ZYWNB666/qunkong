@@ -5,8 +5,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import * as Zmodem from 'zmodem.js/src/zmodem_browser'
 import '@xterm/xterm/css/xterm.css'
-import { Layout, List, Card, Tag, Button, Space, message, Tabs, Modal, Progress } from 'antd'
-import { DesktopOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { Layout, List, Card, Tag, Button, Space, message, Tabs, Modal, Progress, Dropdown } from 'antd'
+import { DesktopOutlined, ReloadOutlined, UploadOutlined, CopyOutlined, CloseOutlined, SyncOutlined } from '@ant-design/icons'
 import { agentApi } from '../utils/api'
 
 const { Sider, Content } = Layout
@@ -37,8 +37,8 @@ const Terminal = () => {
     try {
       setLoading(true)
       const response = await agentApi.getAgents()
-      const onlineAgents = (response.agents || []).filter(agent => agent.status === 'ONLINE')
-      setAgents(onlineAgents)
+      // 显示所有 agent，不再过滤在线状态
+      setAgents(response.agents || [])
     } catch (error) {
       message.error('加载 Agent 列表失败')
     } finally {
@@ -46,20 +46,25 @@ const Terminal = () => {
     }
   }
 
-  const handleAddTab = (agent) => {
-    if (tabs.find(tab => tab.key === agent.id)) {
+  const handleAddTab = (agent, forceNew = false) => {
+    // 如果不是强制新建，检查是否已存在
+    if (!forceNew && tabs.find(tab => tab.key === agent.id)) {
       setActiveTab(agent.id)
       return
     }
 
+    // 生成唯一的key，如果是复制的话，添加时间戳
+    const tabKey = forceNew ? `${agent.id}_${Date.now()}` : agent.id
+
     const newTab = {
-      key: agent.id,
+      key: tabKey,
       label: agent.hostname,
-      agent: agent
+      agent: agent,
+      agentId: agent.id // 保存原始agent id
     }
 
     setTabs(prev => [...prev, newTab])
-    setActiveTab(agent.id)
+    setActiveTab(tabKey)
   }
 
   const handleRemoveTab = (targetKey) => {
@@ -82,6 +87,63 @@ const Terminal = () => {
       setActiveTab(nextTab.key)
     }
   }
+
+  // 复制终端
+  const handleCopyTab = (targetKey) => {
+    const tab = tabs.find(t => t.key === targetKey)
+    if (tab) {
+      handleAddTab(tab.agent, true)
+      message.success('已复制终端')
+    }
+  }
+
+  // 刷新终端
+  const handleRefreshTab = (targetKey) => {
+    const terminal = terminalsRef.current[targetKey]
+    if (terminal) {
+      // 关闭旧连接
+      if (terminal.ws) terminal.ws.close()
+      if (terminal.term) terminal.term.dispose()
+      delete terminalsRef.current[targetKey]
+    }
+
+    const tab = tabs.find(t => t.key === targetKey)
+    if (tab) {
+      // 触发重新渲染
+      setTabs(prev => prev.map(t => 
+        t.key === targetKey ? { ...t, refreshKey: Date.now() } : t
+      ))
+      message.success('终端已刷新')
+    }
+  }
+
+  // 获取标签页右键菜单
+  const getTabContextMenu = (targetKey) => ({
+    items: [
+      {
+        key: 'copy',
+        icon: <CopyOutlined />,
+        label: '复制终端',
+        onClick: () => handleCopyTab(targetKey)
+      },
+      {
+        key: 'refresh',
+        icon: <SyncOutlined />,
+        label: '刷新终端',
+        onClick: () => handleRefreshTab(targetKey)
+      },
+      {
+        type: 'divider'
+      },
+      {
+        key: 'close',
+        icon: <CloseOutlined />,
+        label: '关闭终端',
+        danger: true,
+        onClick: () => handleRemoveTab(targetKey)
+      }
+    ]
+  })
 
   useEffect(() => {
     if (activeTab && terminalsRef.current[activeTab]) {
@@ -109,14 +171,14 @@ const Terminal = () => {
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
-      <Sider width={280} style={{ background: '#fff', borderRight: '1px solid #e8e8e8', overflow: 'auto' }}>
+      <Sider width={250} style={{ background: '#fff', borderRight: '1px solid #e8e8e8', overflow: 'auto' }}>
         <div style={{ padding: '16px', borderBottom: '1px solid #e8e8e8', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <h3 style={{ margin: 0 }}>在线 Agent</h3>
+            <h3 style={{ margin: 0 }}>Agent 列表</h3>
             <Button icon={<ReloadOutlined />} size="small" onClick={loadAgents} />
           </Space>
           <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
-            💡 点击 Agent 添加到终端标签
+            💡 点击添加终端标签
           </div>
           <div style={{ marginTop: 4, fontSize: 12, color: '#52c41a' }}>
             🚀 支持 sz/rz 文件传输
@@ -127,26 +189,33 @@ const Terminal = () => {
           dataSource={agents}
           renderItem={agent => {
             const isActive = tabs.find(tab => tab.key === agent.id)
+            const isOnline = agent.status === 'ONLINE'
             return (
               <List.Item
                 style={{
-                  padding: '12px 16px',
+                  padding: '8px 16px',
                   cursor: 'pointer',
                   background: isActive ? '#e6f7ff' : 'transparent',
                   borderLeft: isActive ? '3px solid #1890ff' : '3px solid transparent'
                 }}
                 onClick={() => handleAddTab(agent)}
               >
-                <List.Item.Meta
-                  avatar={<DesktopOutlined style={{ fontSize: 24 }} />}
-                  title={agent.hostname}
-                  description={
-                    <Space direction="vertical" size={0}>
-                      <span style={{ fontSize: 12 }}>{agent.ip_address}</span>
-                      <Tag color="success" size="small">在线</Tag>
-                    </Space>
-                  }
-                />
+                <div style={{ width: '100%' }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '14px'
+                  }}>
+                    <DesktopOutlined style={{ fontSize: 16 }} />
+                    <span style={{ 
+                      color: isOnline ? '#52c41a' : '#ff4d4f',
+                      fontWeight: 500
+                    }}>
+                      ({agent.hostname}) {agent.ip_address}
+                    </span>
+                  </div>
+                </div>
               </List.Item>
             )
           }}
@@ -173,15 +242,20 @@ const Terminal = () => {
               items={tabs.map(tab => ({
                 key: tab.key,
                 label: (
-                  <span style={{ color: '#d4d4d4' }}>
-                    <DesktopOutlined style={{ marginRight: 6 }} />
-                    {tab.label}
-                  </span>
+                  <Dropdown
+                    menu={getTabContextMenu(tab.key)}
+                    trigger={['contextMenu']}
+                  >
+                    <span style={{ color: '#d4d4d4' }}>
+                      <DesktopOutlined style={{ marginRight: 6 }} />
+                      {tab.label}
+                    </span>
+                  </Dropdown>
                 ),
                 children: (
                   <TerminalPane 
-                    key={tab.key}
-                    agentId={tab.key}
+                    key={`${tab.key}_${tab.refreshKey || 0}`}
+                    agentId={tab.agentId || tab.key}
                     agent={tab.agent}
                     isActive={activeTab === tab.key}
                     terminalsRef={terminalsRef}
@@ -200,7 +274,7 @@ const Terminal = () => {
               <Card>
                 <Space direction="vertical" align="center">
                   <DesktopOutlined style={{ fontSize: 48, color: '#999' }} />
-                  <p>请从左侧选择一个在线 Agent 连接终端</p>
+                  <p>请从左侧选择一个 Agent 连接终端</p>
                   <p style={{ fontSize: 12, color: '#999' }}>支持同时打开多个终端，通过标签页切换</p>
                   <p style={{ fontSize: 12, color: '#52c41a' }}>✨ 支持 sz/rz 文件传输功能</p>
                 </Space>
@@ -682,7 +756,7 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
       <div 
         ref={containerRef}
         style={{ 
-          height: 'calc(100vh - 55px)',
+          height: 'calc(100vh - 70px)',
           width: '100%',
           padding: 10,
           background: '#1e1e1e',
