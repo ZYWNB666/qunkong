@@ -13,3 +13,28 @@ charset = utf8mb4
 # 连接池配置
 max_connections = 20
 timeout = 30
+
+[server]
+# 服务器端口配置
+# WebSocket服务器端口（Agent连接端口）
+websocket_port = 8765
+# Web API服务器端口
+api_port = 5000
+
+[redis]
+# Redis配置 - 用于集群模式（可选）
+# 如果不配置，则运行在单节点模式
+enabled = false
+host = localhost
+port = 6379
+db = 0
+password = 
+# 连接池大小
+max_connections = 10
+
+[cluster]
+# 集群配置（可选）
+# 如果不配置或enabled=false，则运行在单节点模式
+enabled = false
+# 节点ID（可选，如果不设置则自动生成）
+node_id = 

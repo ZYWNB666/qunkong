@@ -32,12 +32,12 @@ const ExecutionHistory = () => {
       
       // 加载作业执行历史
       try {
-        const jobResponse = await simpleJobsApi.getExecutions()
+        const jobResponse = await simpleJobsApi.getExecutions({ project_id: 1 })
         const jobTasks = (jobResponse.executions || []).map(exec => ({
-          task_id: exec.execution_id || exec.id,
+          task_id: exec.id || exec.execution_id,
           script_name: exec.job_name || exec.name || '未命名作业',  // 兼容多种字段名
           status: exec.status?.toLowerCase() || 'unknown',
-          created_at: exec.created_at,
+          created_at: exec.created_at || exec.started_at,
           completed_at: exec.completed_at,
           agent_count: 1,
           task_type: 'job',

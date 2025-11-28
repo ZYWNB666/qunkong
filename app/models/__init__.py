@@ -62,6 +62,7 @@ class DatabaseManager:
                     hostname VARCHAR(255) NOT NULL,
                     ip_address VARCHAR(45) NOT NULL,
                     external_ip VARCHAR(45) DEFAULT '',
+                    os_type VARCHAR(50) DEFAULT 'unknown',
                     status VARCHAR(20) DEFAULT 'OFFLINE',
                     project_id INT,
                     last_heartbeat DATETIME,
@@ -74,9 +75,17 @@ class DatabaseManager:
                     INDEX idx_external_ip (external_ip),
                     INDEX idx_status (status),
                     INDEX idx_last_heartbeat (last_heartbeat),
-                    INDEX idx_project_id (project_id)
+                    INDEX idx_project_id (project_id),
+                    INDEX idx_os_type (os_type)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
+            
+            # 检查并添加 os_type 字段（如果表已存在但没有该字段）
+            cursor.execute("SHOW COLUMNS FROM agents LIKE 'os_type'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE agents ADD COLUMN os_type VARCHAR(50) DEFAULT 'unknown' AFTER external_ip")
+                cursor.execute("ALTER TABLE agents ADD INDEX idx_os_type (os_type)")
+                print("数据库迁移：添加 os_type 字段到 agents 表")
             
             
             # 创建执行历史表
@@ -254,22 +263,15 @@ class DatabaseManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # 从system_info中提取各个部分
+            # 从system_info中提取各个部分 - 修复嵌套结构问题
             sys_info = system_info.get('system_info', {})
-            if isinstance(sys_info, dict):
-                # 如果system_info是嵌套的结构，提取各个部分
-                system_info_json = json.dumps(sys_info.get('system_info', {}))
-                network_info_json = json.dumps(sys_info.get('network_info', {}))
-                memory_info_json = json.dumps(sys_info.get('memory_info', {}))
-                disk_info_json = json.dumps(sys_info.get('disk_info', {}))
-                cpu_info_json = json.dumps(sys_info.get('cpu_info', {}))
-            else:
-                # 如果system_info直接包含格式化后的信息
-                system_info_json = json.dumps(sys_info)
-                network_info_json = json.dumps({})
-                memory_info_json = json.dumps({})
-                disk_info_json = json.dumps({})
-                cpu_info_json = json.dumps({})
+            
+            # 直接提取各个组件
+            system_info_json = json.dumps(sys_info.get('system_info', {}))
+            network_info_json = json.dumps(sys_info.get('network_info', []))
+            memory_info_json = json.dumps(sys_info.get('memory_info', {}))
+            disk_info_json = json.dumps(sys_info.get('disk_info', []))
+            cpu_info_json = json.dumps(sys_info.get('cpu_info', {}))
             
             cursor.execute('''
                 INSERT INTO agent_system_info
@@ -305,19 +307,24 @@ class DatabaseManager:
             return True
         except Exception as e:
             print(f"保存Agent系统信息失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
-    def get_agent_system_info(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        """获取Agent系统信息"""
+    def get_agent_system_info(self, agent_id: str, local_cache=None) -> Optional[Dict[str, Any]]:
+        """获取Agent系统信息（优先从缓存读取实时资源）"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             
+            # 联表查询，同时获取agents表中的external_ip
             cursor.execute('''
-                SELECT agent_id, hostname, ip_address, last_heartbeat, status, register_time,
-                       system_info, network_info, memory_info, disk_info, cpu_info
-                FROM agent_system_info
-                WHERE agent_id = %s
+                SELECT asi.agent_id, asi.hostname, asi.ip_address, asi.last_heartbeat, asi.status, asi.register_time,
+                       asi.system_info, asi.network_info, asi.memory_info, asi.disk_info, asi.cpu_info,
+                       a.external_ip
+                FROM agent_system_info asi
+                LEFT JOIN agents a ON asi.agent_id = a.id
+                WHERE asi.agent_id = %s
             ''', (agent_id,))
             
             row = cursor.fetchone()
@@ -331,10 +338,28 @@ class DatabaseManager:
                 disk_info = row['disk_info'] if isinstance(row['disk_info'], dict) else json.loads(row['disk_info']) if row['disk_info'] else {}
                 cpu_info = row['cpu_info'] if isinstance(row['cpu_info'], dict) else json.loads(row['cpu_info']) if row['cpu_info'] else {}
                 
+                # 如果有本地缓存，优先使用缓存中的实时资源信息
+                if local_cache:
+                    cache_key = f"agent_resource:{agent_id}"
+                    cached_resource = local_cache.get(cache_key)
+                    if cached_resource:
+                        # 用缓存中的实时数据更新
+                        system_info['cpu_usage'] = cached_resource.get('cpu_usage', system_info.get('cpu_usage', 0))
+                        system_info['memory_usage'] = cached_resource.get('memory_usage', system_info.get('memory_usage', 0))
+                        cpu_info['cpu_percent'] = cached_resource.get('cpu_usage', cpu_info.get('cpu_percent', 0))
+                        memory_info['percent'] = cached_resource.get('memory_usage', memory_info.get('percent', 0))
+                        memory_info['total'] = cached_resource.get('memory_total', memory_info.get('total', 0))
+                        memory_info['used'] = cached_resource.get('memory_used', memory_info.get('used', 0))
+                        memory_info['available'] = cached_resource.get('memory_available', memory_info.get('available', 0))
+                        # 更新磁盘信息
+                        if 'disk_info' in cached_resource and cached_resource['disk_info']:
+                            disk_info = cached_resource['disk_info']
+                
                 return {
                     'agent_id': row['agent_id'],
                     'hostname': row['hostname'],
                     'ip_address': row['ip_address'],
+                    'external_ip': row.get('external_ip', ''),  # 添加外网IP
                     'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
                     'status': row['status'],
                     'register_time': row['register_time'].isoformat() if row['register_time'] else None,
@@ -350,6 +375,82 @@ class DatabaseManager:
             print(f"获取Agent系统信息失败: {e}")
             return None
     
+    def update_agent_resource_info(self, agent_id: str, resource_info: Dict[str, Any]) -> bool:
+        """更新Agent实时资源信息（CPU、内存、磁盘使用率等）- 优化版"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # 使用JSON_SET直接更新JSON字段，避免先读取再写入
+            # 构建更新语句
+            update_parts = []
+            params = []
+            
+            if 'cpu_usage' in resource_info:
+                update_parts.append("""
+                    system_info = JSON_SET(system_info, '$.cpu_usage', %s),
+                    cpu_info = JSON_SET(cpu_info, '$.cpu_percent', %s)
+                """)
+                params.extend([resource_info['cpu_usage'], resource_info['cpu_usage']])
+            
+            if 'memory_usage' in resource_info:
+                if not update_parts:
+                    update_parts.append("")
+                update_parts.append("""
+                    system_info = JSON_SET(system_info, '$.memory_usage', %s),
+                    memory_info = JSON_SET(
+                        memory_info,
+                        '$.percent', %s,
+                        '$.total', %s,
+                        '$.used', %s,
+                        '$.available', %s
+                    )
+                """)
+                params.extend([
+                    resource_info['memory_usage'],
+                    resource_info['memory_usage'],
+                    resource_info.get('memory_total', 0),
+                    resource_info.get('memory_used', 0),
+                    resource_info.get('memory_available', 0)
+                ])
+            
+            if 'disk_info' in resource_info and resource_info['disk_info']:
+                if not update_parts:
+                    update_parts.append("")
+                update_parts.append("disk_info = %s")
+                params.append(json.dumps(resource_info['disk_info']))
+            
+            if 'last_heartbeat' in resource_info:
+                if not update_parts:
+                    update_parts.append("")
+                update_parts.append("last_heartbeat = %s")
+                params.append(resource_info['last_heartbeat'])
+            
+            if not update_parts:
+                conn.close()
+                return True
+            
+            params.append(agent_id)
+            
+            # 执行单条UPDATE语句，无需先SELECT
+            sql = f"""
+                UPDATE agent_system_info
+                SET {', '.join(update_parts)}
+                WHERE agent_id = %s
+            """
+            
+            cursor.execute(sql, tuple(params))
+            affected_rows = cursor.rowcount
+            
+            conn.close()
+            return affected_rows > 0
+            
+        except Exception as e:
+            print(f"更新Agent资源信息失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
     def save_agent(self, agent_data: Dict[str, Any]) -> bool:
         """保存Agent基本信息"""
         try:
@@ -358,12 +459,13 @@ class DatabaseManager:
             
             cursor.execute('''
                 INSERT INTO agents
-                (id, hostname, ip_address, external_ip, status, last_heartbeat, register_time, websocket_info)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (id, hostname, ip_address, external_ip, os_type, status, last_heartbeat, register_time, websocket_info)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 hostname = VALUES(hostname),
                 ip_address = VALUES(ip_address),
                 external_ip = COALESCE(VALUES(external_ip), external_ip),
+                os_type = VALUES(os_type),
                 status = VALUES(status),
                 last_heartbeat = VALUES(last_heartbeat),
                 websocket_info = VALUES(websocket_info)
@@ -372,6 +474,7 @@ class DatabaseManager:
                 agent_data.get('hostname', ''),
                 agent_data.get('ip_address', ''),
                 agent_data.get('external_ip', ''),
+                agent_data.get('os_type', 'unknown'),
                 agent_data.get('status', 'OFFLINE'),
                 agent_data.get('last_heartbeat', ''),
                 agent_data.get('register_time', ''),
@@ -391,7 +494,7 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, hostname, ip_address, external_ip, status, last_heartbeat, register_time, websocket_info
+                SELECT id, hostname, ip_address, external_ip, os_type, status, last_heartbeat, register_time, websocket_info
                 FROM agents
                 ORDER BY register_time DESC
             ''')
@@ -409,6 +512,7 @@ class DatabaseManager:
                     'hostname': row['hostname'],
                     'ip_address': row['ip_address'],
                     'external_ip': row.get('external_ip', ''),
+                    'os_type': row.get('os_type', 'unknown'),
                     'status': row['status'],
                     'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
                     'register_time': row['register_time'].isoformat() if row['register_time'] else None,

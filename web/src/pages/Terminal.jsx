@@ -246,10 +246,10 @@ const Terminal = () => {
                     menu={getTabContextMenu(tab.key)}
                     trigger={['contextMenu']}
                   >
-                    <span style={{ color: '#d4d4d4' }}>
-                      <DesktopOutlined style={{ marginRight: 6 }} />
-                      {tab.label}
-                    </span>
+                  <span style={{ color: '#d4d4d4' }}>
+                    <DesktopOutlined style={{ marginRight: 6 }} />
+                    {tab.label}
+                  </span>
                   </Dropdown>
                 ),
                 children: (

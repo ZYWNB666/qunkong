@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from app.models import DatabaseManager, generate_agent_id
+from app.cluster import ClusterManager
+from app.cache import get_local_cache
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -183,7 +185,7 @@ class TerminalManager:
 class QunkongServer:
     """Qunkong 服务端主类"""
     
-    def __init__(self, host="0.0.0.0", port=8765, web_port=5000):
+    def __init__(self, host="0.0.0.0", port=8765, web_port=5000, cluster_manager=None):
         self.host = host
         self.port = port
         self.web_port = web_port
@@ -191,6 +193,8 @@ class QunkongServer:
         self.tasks: Dict[str, Task] = {}
         self.running = False
         self.db = DatabaseManager()  # 初始化数据库管理器
+        # 集群管理器
+        self.cluster = cluster_manager
         # 心跳检查任务
         self.heartbeat_check_task = None
         # 终端管理器
@@ -199,6 +203,12 @@ class QunkongServer:
         self.session_cleanup_task = None
         # 主事件循环引用
         self.loop = None
+        # 跨节点终端会话映射 {session_id: target_node_id}
+        self.remote_terminal_sessions: Dict[str, str] = {}
+        # 本地缓存（用于实时资源信息）
+        self.local_cache = get_local_cache()
+        # 资源信息数据库写入计数器
+        self.resource_update_counters = {}  # agent_id -> counter
 
     async def register_agent(self, websocket, agent_info: dict):
         """注册 Agent"""
@@ -229,6 +239,7 @@ class QunkongServer:
             'hostname': agent.hostname,
             'ip_address': agent.ip,  # 内网IP
             'external_ip': agent_info.get('external_ip', ''),  # 外网IP
+            'os_type': agent_info.get('platform', 'unknown'),  # 操作系统类型
             'status': agent.status,
             'last_heartbeat': agent.last_heartbeat,
             'register_time': datetime.now().isoformat(),
@@ -249,6 +260,10 @@ class QunkongServer:
                 'system_info': agent_info['system_info']
             }
             self.db.save_agent_system_info(agent_id, system_data)
+
+        # 在集群模式下注册Agent位置
+        if self.cluster:
+            await self.cluster.register_agent_location(agent_id, agent_info)
 
         # 发送注册确认
         response = {
@@ -273,15 +288,45 @@ class QunkongServer:
                     self.agents[agent_id].last_heartbeat = current_time
                     self.agents[agent_id].status = "ONLINE"
                     
-                    # 更新数据库中的心跳时间
+                    # 如果心跳中包含资源信息，缓存到本地内存（不立即写数据库）
+                    if any(k in message for k in ['cpu_usage', 'memory_usage', 'memory_total', 'disk_info']):
+                        cache_key = f"agent_resource:{agent_id}"
+                        resource_info = {
+                            'cpu_usage': message.get('cpu_usage', 0),
+                            'memory_usage': message.get('memory_usage', 0),
+                            'memory_total': message.get('memory_total', 0),
+                            'memory_used': message.get('memory_used', 0),
+                            'memory_available': message.get('memory_available', 0),
+                            'disk_info': message.get('disk_info', []),  # 添加磁盘信息
+                            'last_heartbeat': current_time,  # 添加心跳时间
+                            'last_update': current_time
+                        }
+                        # 缓存到本地内存，TTL=30秒（资源信息30秒内有效）
+                        self.local_cache.set(cache_key, resource_info, ttl=30)
+                        
+                        # 每12次心跳（约1分钟）写一次数据库，避免频繁写入
+                        if agent_id not in self.resource_update_counters:
+                            self.resource_update_counters[agent_id] = 0
+                        
+                        self.resource_update_counters[agent_id] += 1
+                        
+                        # 每12次（约1分钟）或第一次时写入数据库
+                        if self.resource_update_counters[agent_id] == 1 or self.resource_update_counters[agent_id] >= 12:
+                            self.db.update_agent_resource_info(agent_id, resource_info)
+                            self.resource_update_counters[agent_id] = 0  # 重置计数器
+                            logger.debug(f"Agent {agent_id} 资源信息已写入数据库")
+                    
+                    # 更新数据库中的心跳时间（轻量级更新，只更新状态和时间）
                     # 先获取现有的Agent完整信息，避免覆盖其他字段
                     existing_agents = self.db.get_all_agents()
                     register_time = current_time  # 默认值
                     external_ip = ''  # 默认值
+                    os_type = 'unknown'  # 默认值
                     for existing_agent in existing_agents:
                         if existing_agent['id'] == agent_id:
                             register_time = existing_agent['register_time']
                             external_ip = existing_agent.get('external_ip', '')
+                            os_type = existing_agent.get('os_type', 'unknown')
                             break
                     
                     agent_data = {
@@ -289,6 +334,7 @@ class QunkongServer:
                         'hostname': self.agents[agent_id].hostname,
                         'ip_address': self.agents[agent_id].ip,
                         'external_ip': external_ip,  # 保持原有的外网IP
+                        'os_type': os_type,  # 保持原有的操作系统类型
                         'status': 'ONLINE',
                         'last_heartbeat': current_time,
                         'register_time': register_time,
@@ -734,7 +780,25 @@ class QunkongServer:
         """处理PTY终端WebSocket连接"""
         session_id = None
         try:
-            # 检查Agent是否在线
+            # 检查Agent是否在线 - 支持集群模式
+            agent_location = None
+            if self.cluster:
+                agent_location = await self.cluster.get_agent_location(agent_id)
+                
+                if not agent_location:
+                    error_msg = {
+                        'type': 'terminal_error',
+                        'error': f'Agent {agent_id} not found in cluster'
+                    }
+                    await websocket.send(json.dumps(error_msg))
+                    return
+                
+                # 如果Agent在其他节点，建立代理会话
+                if not agent_location.get('is_local', True):
+                    await self._handle_remote_terminal(websocket, agent_id, agent_location)
+                    return
+            
+            # Agent在本地或单节点模式
             if agent_id not in self.agents:
                 error_msg = {
                     'type': 'terminal_error',
@@ -829,6 +893,88 @@ class QunkongServer:
             if session_id:
                 await self.close_pty_terminal_session(session_id)
                 logger.info(f"PTY终端WebSocket连接已关闭: session_id={session_id}")
+    
+    async def _handle_remote_terminal(self, websocket, agent_id: str, agent_location: dict):
+        """处理远程节点的终端连接（代理模式）"""
+        session_id = f"remote_{agent_id}_{secrets.token_urlsafe(16)}"
+        target_node = agent_location['node_id']
+        
+        logger.info(f"代理终端连接: session={session_id}, agent={agent_id} -> node:{target_node}")
+        
+        try:
+            # 记录远程会话
+            self.remote_terminal_sessions[session_id] = target_node
+            
+            # 向目标节点发送终端初始化请求
+            init_message = {
+                'type': 'terminal_init_request',
+                'session_id': session_id,
+                'agent_id': agent_id,
+                'requester_node': self.cluster.node_id
+            }
+            await self.cluster.send_to_node(target_node, init_message)
+            
+            # 发送连接成功消息
+            success_msg = {
+                'type': 'terminal_ready',
+                'session_id': session_id,
+                'agent_id': agent_id,
+                'remote': True
+            }
+            await websocket.send(json.dumps(success_msg))
+            
+            # 处理前端消息并转发到目标节点
+            try:
+                async for message in websocket:
+                    try:
+                        if isinstance(message, bytes):
+                            # 二进制数据
+                            input_data = base64.b64encode(message).decode('ascii')
+                            forward_msg = {
+                                'type': 'terminal_forward_input',
+                                'session_id': session_id,
+                                'data': input_data,
+                                'is_binary': True
+                            }
+                            await self.cluster.send_to_node(target_node, forward_msg)
+                        else:
+                            # 文本/JSON数据
+                            try:
+                                data = json.loads(message)
+                                if isinstance(data, dict):
+                                    data['session_id'] = session_id
+                                    forward_msg = {
+                                        'type': 'terminal_forward_message',
+                                        'session_id': session_id,
+                                        'data': data
+                                    }
+                                    await self.cluster.send_to_node(target_node, forward_msg)
+                            except json.JSONDecodeError:
+                                forward_msg = {
+                                    'type': 'terminal_forward_input',
+                                    'session_id': session_id,
+                                    'data': message,
+                                    'is_binary': False
+                                }
+                                await self.cluster.send_to_node(target_node, forward_msg)
+                    except Exception as e:
+                        logger.error(f"转发终端消息失败: {e}")
+            except Exception as e:
+                logger.error(f"远程终端连接异常: {e}")
+        finally:
+            # 清理远程会话
+            if session_id in self.remote_terminal_sessions:
+                del self.remote_terminal_sessions[session_id]
+            
+            # 通知目标节点关闭会话
+            close_msg = {
+                'type': 'terminal_close_request',
+                'session_id': session_id
+            }
+            if self.cluster:
+                await self.cluster.send_to_node(target_node, close_msg)
+            
+            logger.info(f"远程终端连接已关闭: session={session_id}")
 
     async def handle_client(self, websocket, path):
         """处理客户端连接"""
@@ -941,11 +1087,153 @@ class QunkongServer:
                         logger.info(f"Agent {agent_id} 状态已更新为离线")
                         break
                 
+                # 在集群模式下注销Agent位置
+                if self.cluster:
+                    await self.cluster.unregister_agent_location(agent_id)
+                
                 # 从内存中移除Agent（可选，也可以保留用于重连）
                 # del self.agents[agent_id]
                 
         except Exception as e:
             logger.error(f"清理断开连接的Agent时出错: {e}")
+    
+    async def _setup_cluster_handlers(self):
+        """设置集群消息处理器"""
+        if not self.cluster:
+            return
+        
+        # 注册终端初始化请求处理器
+        self.cluster.register_handler('terminal_init_request', self._handle_cluster_terminal_init)
+        
+        # 注册终端消息转发处理器
+        self.cluster.register_handler('terminal_forward_input', self._handle_cluster_terminal_input)
+        self.cluster.register_handler('terminal_forward_message', self._handle_cluster_terminal_message)
+        
+        # 注册终端关闭请求处理器
+        self.cluster.register_handler('terminal_close_request', self._handle_cluster_terminal_close)
+        
+        logger.info("集群消息处理器已注册")
+    
+    async def _handle_cluster_terminal_init(self, data: dict):
+        """处理集群终端初始化请求"""
+        try:
+            session_id = data.get('session_id')
+            agent_id = data.get('agent_id')
+            requester_node = data.get('requester_node')
+            
+            logger.info(f"收到远程终端初始化请求: session={session_id}, agent={agent_id}, from=node:{requester_node}")
+            
+            # 检查Agent是否在本地
+            if agent_id not in self.agents:
+                logger.error(f"Agent不在本地: {agent_id}")
+                return
+            
+            agent = self.agents[agent_id]
+            if agent.status != 'ONLINE':
+                logger.error(f"Agent不在线: {agent_id}")
+                return
+            
+            # 创建一个虚拟的WebSocket对象用于接收转发的消息
+            class RemoteWebSocketProxy:
+                def __init__(self, cluster, requester_node, session_id):
+                    self.cluster = cluster
+                    self.requester_node = requester_node
+                    self.session_id = session_id
+                
+                async def send(self, message):
+                    # 转发消息回请求节点
+                    forward_msg = {
+                        'type': 'terminal_response',
+                        'session_id': self.session_id,
+                        'data': message
+                    }
+                    await self.cluster.send_to_node(self.requester_node, forward_msg)
+            
+            proxy_ws = RemoteWebSocketProxy(self.cluster, requester_node, session_id)
+            
+            # 创建本地终端会话
+            local_session_id = await self.create_pty_terminal_session(agent_id, "admin", proxy_ws)
+            
+            if local_session_id:
+                # 映射远程session_id到本地session_id
+                self.remote_terminal_sessions[session_id] = local_session_id
+                logger.info(f"远程终端会话已创建: remote={session_id}, local={local_session_id}")
+            else:
+                logger.error(f"创建终端会话失败: agent={agent_id}")
+                
+        except Exception as e:
+            logger.error(f"处理集群终端初始化请求失败: {e}")
+    
+    async def _handle_cluster_terminal_input(self, data: dict):
+        """处理集群终端输入"""
+        try:
+            session_id = data.get('session_id')
+            input_data = data.get('data', '')
+            is_binary = data.get('is_binary', False)
+            
+            # 获取本地会话ID
+            local_session_id = self.remote_terminal_sessions.get(session_id)
+            if not local_session_id:
+                logger.warning(f"远程会话不存在: {session_id}")
+                return
+            
+            # 处理输入
+            await self.handle_pty_terminal_input(local_session_id, input_data, is_binary)
+            
+        except Exception as e:
+            logger.error(f"处理集群终端输入失败: {e}")
+    
+    async def _handle_cluster_terminal_message(self, data: dict):
+        """处理集群终端消息"""
+        try:
+            session_id = data.get('session_id')
+            message_data = data.get('data', {})
+            
+            # 获取本地会话ID
+            local_session_id = self.remote_terminal_sessions.get(session_id)
+            if not local_session_id:
+                logger.warning(f"远程会话不存在: {session_id}")
+                return
+            
+            # 处理消息
+            msg_type = message_data.get('type')
+            
+            if msg_type == 'terminal_input':
+                input_data = message_data.get('data', '')
+                is_binary = message_data.get('is_binary', False)
+                await self.handle_pty_terminal_input(local_session_id, input_data, is_binary)
+            elif msg_type == 'terminal_resize':
+                cols = message_data.get('cols', 80)
+                rows = message_data.get('rows', 24)
+                await self.handle_pty_terminal_resize(local_session_id, cols, rows)
+            elif msg_type == 'terminal_ping':
+                self.terminal_manager.update_activity(local_session_id)
+            
+        except Exception as e:
+            logger.error(f"处理集群终端消息失败: {e}")
+    
+    async def _handle_cluster_terminal_close(self, data: dict):
+        """处理集群终端关闭请求"""
+        try:
+            session_id = data.get('session_id')
+            
+            # 获取本地会话ID
+            local_session_id = self.remote_terminal_sessions.get(session_id)
+            if not local_session_id:
+                logger.warning(f"远程会话不存在: {session_id}")
+                return
+            
+            # 关闭本地会话
+            await self.close_pty_terminal_session(local_session_id)
+            
+            # 清理映射
+            if session_id in self.remote_terminal_sessions:
+                del self.remote_terminal_sessions[session_id]
+            
+            logger.info(f"远程终端会话已关闭: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"处理集群终端关闭请求失败: {e}")
 
     async def check_agent_heartbeats(self):
         """检查Agent心跳，将超时的Agent标记为离线"""
@@ -1200,6 +1488,14 @@ class QunkongServer:
         self.loop = asyncio.get_event_loop()
         logger.info(f"Qunkong 服务器启动在 ws://{self.host}:{self.port}")
         
+        # 启动集群管理器
+        if self.cluster:
+            await self.cluster.start()
+            await self._setup_cluster_handlers()
+            logger.info(f"集群模式已启动: node_id={self.cluster.node_id}")
+        else:
+            logger.info("单节点模式运行")
+        
         # 启动心跳检查任务
         self.heartbeat_check_task = asyncio.create_task(self.check_agent_heartbeats())
         logger.info("心跳检查任务已启动")
@@ -1226,6 +1522,11 @@ class QunkongServer:
             ):
                 await asyncio.Future()  # 保持运行
         finally:
+            # 服务器关闭时停止集群
+            if self.cluster:
+                await self.cluster.stop()
+                logger.info("集群管理器已停止")
+            
             # 服务器关闭时取消任务
             if self.heartbeat_check_task:
                 self.heartbeat_check_task.cancel()

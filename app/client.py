@@ -12,11 +12,20 @@ import hashlib
 import subprocess
 import os
 from datetime import datetime
+
+# 平台相关导入
+try:
 import pty
-import select
 import termios
-import struct
 import fcntl
+    import struct
+except ImportError:
+    pty = None
+    termios = None
+    fcntl = None
+    struct = None
+
+import select
 import signal
 import threading
 import queue
@@ -151,8 +160,8 @@ class QunkongAgent:
 
             # 基本信息
             system_info = {
-                'platform': 'Linux',
-                'system': 'Linux',
+                'platform': platform.system(),
+                'system': platform.system(),
                 'release': platform.release(),
                 'version': platform.version(),
                 'machine': platform.machine(),
@@ -256,18 +265,22 @@ class QunkongAgent:
                 logger.warning("获取网络信息失败: {}".format(e))
                 network_info = []
 
-            # 系统特定信息 - 只支持Linux
+            # 系统特定信息
             system_specific = {}
             try:
+                if platform.system() == 'Linux':
                 system_specific = self._get_linux_info()
             except Exception as e:
                 logger.warning("获取系统特定信息失败: {}".format(e))
                 system_specific = {}
 
             # 格式化系统信息以匹配前端显示需求
+            # 优先使用 /etc/os-release 的信息
+            os_name = system_specific.get('os_name') or "{} {}".format(system_info.get('system', 'Unknown'), system_info.get('release', ''))
+            
             formatted_system_info = {
-                # 操作系统信息
-                'os': "Linux {}".format(system_info.get('release', '')),
+                # 操作系统信息 - 使用 PRETTY_NAME
+                'os': os_name,
                 'kernel': system_info.get('version', 'Unknown'),
                 'architecture': system_info.get('architecture', 'Unknown'),
                 'hostname': system_info.get('hostname', 'Unknown'),
@@ -291,6 +304,10 @@ class QunkongAgent:
                 # 系统运行时间和负载
                 'uptime': self._get_system_uptime(),
                 'load_average': self._get_load_average(),
+                
+                # 发行版详细信息（来自 /etc/os-release）
+                'os_version': system_specific.get('os_version', ''),
+                'distribution': system_specific.get('distribution', ''),
             }
 
             return {
@@ -312,16 +329,33 @@ class QunkongAgent:
 
         info = {}
         try:
-            # 获取Linux发行版信息
+            # 获取Linux发行版信息 - 从 /etc/os-release 读取
             if os.path.exists('/etc/os-release'):
                 with open('/etc/os-release', 'r', encoding='utf-8') as f:
                     for line in f:
-                        if line.startswith('PRETTY_NAME='):
-                            info['os_name'] = line.split('=', 1)[1].strip().strip('"')
-                        elif line.startswith('VERSION_ID='):
-                            info['os_version'] = line.split('=', 1)[1].strip().strip('"')
-                        elif line.startswith('ID='):
-                            info['distribution'] = line.split('=', 1)[1].strip().strip('"')
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            # 移除引号
+                            value = value.strip().strip('"').strip("'")
+                            
+                            if key == 'PRETTY_NAME':
+                                info['os_name'] = value  # 例如: "Ubuntu 24.04.3 LTS"
+                            elif key == 'NAME':
+                                info['name'] = value  # 例如: "Ubuntu"
+                            elif key == 'VERSION_ID':
+                                info['os_version'] = value  # 例如: "24.04"
+                            elif key == 'VERSION':
+                                info['version'] = value  # 例如: "24.04.3 LTS (Noble Numbat)"
+                            elif key == 'VERSION_CODENAME':
+                                info['codename'] = value  # 例如: "noble"
+                            elif key == 'ID':
+                                info['distribution'] = value  # 例如: "ubuntu"
+                            elif key == 'ID_LIKE':
+                                info['id_like'] = value  # 例如: "debian"
             
             # 获取内核信息
             result = subprocess.run(['uname', '-r'], capture_output=True, text=True, timeout=5)
@@ -459,7 +493,7 @@ class QunkongAgent:
             'hostname': self.hostname,
             'ip': self.ip,  # 内网IP
             'external_ip': self.external_ip,  # 外网IP
-            'platform': 'Linux',
+            'platform': platform.system(),
             'python_version': platform.python_version(),
             'system_info': system_info
         }
@@ -469,14 +503,47 @@ class QunkongAgent:
         logger.info("向服务器注册: {}".format(self.hostname))
 
     async def send_heartbeat(self, websocket=None):
-        """发送心跳"""
+        """发送心跳 - 包含实时系统资源信息"""
         if websocket is None:
             websocket = self.websocket
         try:
+            # 获取实时系统资源信息
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            memory = psutil.virtual_memory()
+            
+            # 获取磁盘使用信息（轻量级，只获取主要分区）
+            disk_info = []
+            try:
+                for partition in psutil.disk_partitions():
+                    # 跳过特殊文件系统和无法访问的分区
+                    if partition.fstype and partition.fstype not in ['tmpfs', 'devtmpfs', 'squashfs']:
+                        try:
+                            usage = psutil.disk_usage(partition.mountpoint)
+                            disk_info.append({
+                                'device': partition.device,
+                                'mountpoint': partition.mountpoint,
+                                'fstype': partition.fstype,
+                                'total': usage.total,
+                                'used': usage.used,
+                                'free': usage.free,
+                                'percent': round(usage.percent, 1)
+                            })
+                        except (PermissionError, OSError):
+                            continue
+            except:
+                pass
+            
             heartbeat_message = {
                 'type': 'heartbeat',
                 'agent_id': self.agent_id,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                # 添加实时资源信息
+                'cpu_usage': cpu_percent,
+                'memory_usage': memory.percent,
+                'memory_total': memory.total,
+                'memory_used': memory.used,
+                'memory_available': memory.available,
+                'disk_info': disk_info  # 添加磁盘信息
             }
             message_json = json.dumps(heartbeat_message)
             await websocket.send(message_json)
@@ -491,6 +558,8 @@ class QunkongAgent:
         import time
         import tempfile
         import os
+        import platform
+        import shlex
         
         start_time = time.time()
         temp_script_path = None
@@ -498,65 +567,114 @@ class QunkongAgent:
         try:
             # 生成临时文件名，使用task_id作为文件名的一部分
             if task_id:
-                temp_filename = "qunkong_script_{}.sh".format(task_id)
+                temp_filename = "qunkong_script_{}".format(task_id)
             else:
-                temp_filename = "qunkong_script_{}.sh".format(int(time.time()))
+                temp_filename = "qunkong_script_{}".format(int(time.time()))
             
             # 创建临时脚本文件
             temp_dir = tempfile.gettempdir()
-            temp_script_path = os.path.join(temp_dir, temp_filename)
+            
+            # 检测系统类型
+            system_type = platform.system()
             
             # 根据脚本类型确定解释器和扩展名
             is_python = script.startswith('#!/usr/bin/env python3') or script.startswith('#!/usr/bin/python')
             
             if is_python:
                 # Python脚本
-                interpreter = 'python3'
-                temp_script_path = temp_script_path.replace('.sh', '.py')
+                interpreter = 'python3' if system_type != 'Windows' else 'python'
+                # 检查Windows下是否有python3命令
+                if system_type == 'Windows':
+                    try:
+                        subprocess.run(['python3', '--version'], capture_output=True, check=False)
+                    except FileNotFoundError:
+                        interpreter = 'python'
+
+                extension = '.py'
+                temp_script_path = os.path.join(temp_dir, temp_filename + extension)
             else:
-                # Shell脚本
+                if system_type == 'Windows':
+                    # Windows Shell脚本 (PowerShell)
+                    interpreter = 'powershell'
+                    temp_script_path = os.path.join(temp_dir, temp_filename + '.ps1')
+                    # 移除shebang行，防止PowerShell报错
+                    if script.startswith('#!'):
+                        lines = script.split('\n')
+                        if lines and lines[0].startswith('#!'):
+                            script = '\n'.join(lines[1:])
+                else:
+                    # Linux Shell脚本
                 interpreter = '/bin/bash'
+                    temp_script_path = os.path.join(temp_dir, temp_filename + '.sh')
                 if not script.startswith('#!'):
                     script = '#!/bin/bash\n' + script
             
             # 将脚本内容写入临时文件
-            with open(temp_script_path, 'w', encoding='utf-8') as f:
+            # Windows PowerShell 有时需要 BOM
+            encoding = 'utf-8-sig' if system_type == 'Windows' and not is_python else 'utf-8'
+            
+            with open(temp_script_path, 'w', encoding=encoding) as f:
                 f.write(script)
             
-            # 给脚本文件添加执行权限
+            # 给脚本文件添加执行权限 (Linux)
+            if system_type != 'Windows':
+                try:
             os.chmod(temp_script_path, 0o755)
+                except:
+                    pass
             
             # 构建执行命令
             if is_python:
                 cmd = [interpreter, temp_script_path]
             else:
+                if system_type == 'Windows':
+                    # -ExecutionPolicy Bypass 允许执行未签名的脚本
+                    cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-File', temp_script_path]
+            else:
                 cmd = ['/bin/bash', temp_script_path]
             
             # 添加脚本参数
             if script_params:
-                # 将参数字符串按空格分割，但要考虑引号内的空格
-                import shlex
                 try:
-                    params = shlex.split(script_params)
+                    # shlex在Windows上可能行为不同
+                    params = shlex.split(script_params, posix=(system_type != 'Windows'))
                     cmd.extend(params)
                 except ValueError:
                     # 如果参数解析失败，按简单空格分割
                     cmd.extend(script_params.split())
             
-            logger.debug("执行命令: {}".format(' '.join(cmd)))
+            logger.info("执行命令: {}".format(' '.join(cmd)))
+            logger.info("临时脚本路径: {}".format(temp_script_path))
+            logger.info("工作目录: {}".format(os.getcwd()))
+            
+            # 验证解释器是否存在
+            if system_type != 'Windows' and not is_python:
+                if not os.path.exists(interpreter):
+                    # 尝试使用 bash 或 sh
+                    if os.path.exists('/bin/bash'):
+                        interpreter = '/bin/bash'
+                        cmd[0] = interpreter
+                    elif os.path.exists('/bin/sh'):
+                        interpreter = '/bin/sh'
+                        cmd[0] = interpreter
+                    else:
+                        raise FileNotFoundError("Shell interpreter not found: tried /bin/bash and /bin/sh")
             
             # 执行脚本
+            # Windows下如果不使用shell=True，可能需要完整的路径或PATH中存在
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 cwd=os.getcwd(),
-                encoding='utf-8',
+                encoding='utf-8', # 尝试使用utf-8捕获输出
                 errors='replace'  # 遇到编码错误时替换为?
             )
             
             execution_time = time.time() - start_time
+            
+            logger.info("脚本执行完成: exit_code={}, time={:.2f}s".format(result.returncode, execution_time))
             
             return {
                 'exit_code': result.returncode,
@@ -567,14 +685,25 @@ class QunkongAgent:
             
         except subprocess.TimeoutExpired:
             execution_time = time.time() - start_time
+            logger.error(f'脚本执行超时 (>{timeout}秒)')
             return {
                 'exit_code': -1,
                 'stdout': '',
                 'stderr': f'脚本执行超时 (>{timeout}秒)',
                 'execution_time': execution_time
             }
+        except FileNotFoundError as e:
+            execution_time = time.time() - start_time
+            logger.error(f'执行错误 - 文件未找到: {str(e)}')
+            return {
+                'exit_code': -1,
+                'stdout': '',
+                'stderr': f'执行错误: {str(e)}',
+                'execution_time': execution_time
+            }
         except Exception as e:
             execution_time = time.time() - start_time
+            logger.error(f'执行错误: {str(e)}', exc_info=True)
             return {
                 'exit_code': -1,
                 'stdout': '',
@@ -742,6 +871,9 @@ class QunkongAgent:
         """处理重启主机命令"""
         try:
             import subprocess
+            import platform
+            
+            system_type = platform.system()
             
             # 发送重启响应
             response_message = {
@@ -749,15 +881,19 @@ class QunkongAgent:
                 'agent_id': self.agent_id,
                 'restart_type': 'host',
                 'success': True,
-                'message': 'Host restart initiated on Linux'
+                'message': f'Host restart initiated on {system_type}'
             }
             await self.websocket.send(json.dumps(response_message))
             
-            logger.info("主机重启中... (系统类型: Linux)")
+            logger.info(f"主机重启中... (系统类型: {system_type})")
             
             # 延迟一点时间让响应发送完成
             await asyncio.sleep(2)
             
+            if system_type == 'Windows':
+                 # Windows reboot
+                 subprocess.run(['shutdown', '/r', '/t', '0'], check=False)
+            else:
             # 执行Linux重启命令
             try:
                 # 尝试使用systemctl (systemd)
@@ -972,6 +1108,10 @@ class QunkongAgent:
     async def handle_terminal_init(self, session_id: str, cols: int = 80, rows: int = 24):
         """初始化PTY终端"""
         try:
+            if platform.system() == 'Windows':
+                 await self.send_terminal_error(session_id, "Windows agent does not support PTY terminal sessions yet.")
+                 return
+
             # 创建PTY
             master_fd, slave_fd = pty.openpty()
             

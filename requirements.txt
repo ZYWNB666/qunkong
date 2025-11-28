@@ -1,7 +1,33 @@
-flask==2.3.3
-flask-cors==4.0.0
-websockets==11.0.3
-psutil==5.9.5
-pymysql==1.1.0
-configparser==6.0.0
-PyJWT==2.8.0
+# FastAPI 核心
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# 数据验证
+pydantic>=2.0.0
+email-validator>=2.0.0
+
+# 数据库
+pymysql>=1.1.0
+DBUtils>=3.1.0
+
+# WebSocket
+websockets>=11.0.3
+
+# Redis（集群模式）
+redis>=4.5.0
+
+# 认证
+PyJWT>=2.8.0
+
+# 工具
+psutil>=5.9.5
+configparser>=6.0.0
+
+# 生产服务器（可选，Linux/Mac 专用）
+gunicorn>=21.0.0; sys_platform != 'win32'
+uvloop>=0.19.0; sys_platform != 'win32'
+
+# 开发依赖（可选）
+# httpx>=0.25.0  # 测试客户端
+# pytest>=7.0.0  # 测试框架
