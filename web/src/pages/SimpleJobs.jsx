@@ -68,29 +68,13 @@ const SimpleJobs = () => {
       const response = await simpleJobsApi.getJob(job.id)
       const jobDetails = response.job
       
-      console.log('=== 加载的作业详情 ===')
-      console.log('完整数据:', jobDetails)
-      console.log('host_groups:', jobDetails.host_groups)
-      console.log('steps:', jobDetails.steps)
-      
       // 处理步骤数据：将 host_group_id 转换为 host_group_index
       const processedSteps = jobDetails.steps?.map((step, stepIndex) => {
-        console.log(`步骤${stepIndex + 1}:`, {
-          step_name: step.step_name,
-          host_group_id: step.host_group_id,
-          host_group_id_type: typeof step.host_group_id
-        })
-        
         // 找到对应的 host_group_id 在 host_groups 数组中的索引
         let hostGroupIndex = -1
         if (step.host_group_id) {
-          hostGroupIndex = jobDetails.host_groups?.findIndex(hg => {
-            console.log(`  比较: hg.id(${hg.id}) === step.host_group_id(${step.host_group_id})`, hg.id === step.host_group_id)
-            return hg.id === step.host_group_id
-          }) ?? -1
+          hostGroupIndex = jobDetails.host_groups?.findIndex(hg => hg.id === step.host_group_id) ?? -1
         }
-        
-        console.log(`  找到的索引: ${hostGroupIndex}`)
         
         return {
           step_name: step.step_name,
@@ -108,10 +92,6 @@ const SimpleJobs = () => {
         variables: jobDetails.variables || [],
         steps: processedSteps
       })
-      
-      console.log('=== 设置的表单值 ===')
-      console.log('host_groups:', jobDetails.host_groups)
-      console.log('steps:', processedSteps)
       
       setActiveTab('basic')
       setFormModified(false)
@@ -146,9 +126,6 @@ const SimpleJobs = () => {
     try {
       const values = await form.validateFields()
       
-      console.log('=== 提交前的表单值 ===')
-      console.log('原始values:', values)
-      
       // 过滤有效的主机组
       const validHostGroups = values.host_groups?.filter(hg => hg.group_name && hg.host_ids?.length > 0) || []
       
@@ -167,10 +144,6 @@ const SimpleJobs = () => {
         })) || []
       }
       
-      console.log('=== 提交的payload ===')
-      console.log('payload:', payload)
-      console.log('steps:', payload.steps)
-      
       if (editingJob) {
         // 更新作业 - 需要分步骤更新
         await simpleJobsApi.updateJob(editingJob.id, {
@@ -182,8 +155,7 @@ const SimpleJobs = () => {
         // 这里简化处理，实际应该做增量更新
         message.success('作业更新成功')
       } else {
-        const response = await simpleJobsApi.createJob(payload)
-        console.log('创建作业响应:', response)
+        await simpleJobsApi.createJob(payload)
         message.success('作业创建成功')
       }
       
@@ -385,11 +357,7 @@ const SimpleJobs = () => {
                             placeholder="选择主机"
                             optionFilterProp="children"
                             tagRender={(props) => {
-                              console.log('TagRender props.value:', props.value)
-                              console.log('Agents length:', agents.length)
-                              console.log('Agents IDs:', agents.map(a => a.id))
                               const agent = agents.find(a => a.id === props.value)
-                              console.log('Found agent:', agent)
                               return (
                                 <Tag 
                                   closable={props.closable} 

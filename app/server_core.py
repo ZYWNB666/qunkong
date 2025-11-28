@@ -1343,6 +1343,107 @@ class QunkongServer:
         
         return task_id
 
+    async def execute_script_on_agent(self, agent_id: str, script: str, timeout: int = 300) -> dict:
+        """
+        在指定agent上执行脚本并返回结果
+        用于作业执行等场景
+        
+        Args:
+            agent_id: Agent ID
+            script: 要执行的脚本内容
+            timeout: 超时时间（秒）
+        
+        Returns:
+            dict: 执行结果 {
+                'exit_code': int,
+                'output': str,
+                'error': str,
+                'agent_hostname': str,
+                'agent_ip': str
+            }
+        """
+        try:
+            # 查找agent
+            if agent_id not in self.agents:
+                return {
+                    'exit_code': -1,
+                    'output': '',
+                    'error': f'Agent {agent_id} 不在线',
+                    'agent_hostname': '未知',
+                    'agent_ip': ''
+                }
+            
+            agent = self.agents[agent_id]
+            
+            # 创建临时任务
+            task_id = str(uuid.uuid4())
+            task = Task(
+                id=task_id,
+                script=script,
+                target_hosts=[agent_id],
+                timeout=timeout,
+                results={},
+                status="PENDING",
+                created_at=datetime.now().isoformat(),
+                started_at="",
+                completed_at=""
+            )
+            self.tasks[task_id] = task
+            
+            # 发送执行任务
+            task_message = {
+                'type': 'execute_task',
+                'task_id': task_id,
+                'script': script,
+                'script_params': '',
+                'timeout': timeout,
+                'execution_user': 'root'
+            }
+            
+            await agent.websocket.send(json.dumps(task_message))
+            logger.debug(f"向Agent {agent_id} 发送脚本执行任务: {task_id}")
+            
+            # 等待执行结果（轮询）
+            max_wait = timeout + 10
+            start_time = time.time()
+            
+            while time.time() - start_time < max_wait:
+                if agent_id in task.results:
+                    result = task.results[agent_id]
+                    # 添加agent信息
+                    result['agent_hostname'] = agent.hostname
+                    result['agent_ip'] = agent.ip
+                    
+                    # 清理临时任务
+                    if task_id in self.tasks:
+                        del self.tasks[task_id]
+                    
+                    return result
+                
+                await asyncio.sleep(0.5)
+            
+            # 超时
+            if task_id in self.tasks:
+                del self.tasks[task_id]
+            
+            return {
+                'exit_code': -1,
+                'output': '',
+                'error': f'执行超时（{timeout}秒）',
+                'agent_hostname': agent.hostname,
+                'agent_ip': agent.ip
+            }
+            
+        except Exception as e:
+            logger.error(f"执行脚本失败: {e}")
+            return {
+                'exit_code': -1,
+                'output': '',
+                'error': str(e),
+                'agent_hostname': '未知',
+                'agent_ip': ''
+            }
+
     async def dispatch_task(self, task_id: str):
         """分发任务到目标主机"""
         if task_id not in self.tasks:

@@ -52,10 +52,11 @@
 
 .current-project-sidebar {
   padding: 8px 12px;
-  margin: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.85);
+  margin: 12px 8px 16px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
   position: relative;
   transition: all 0.3s;
   cursor: pointer;
@@ -65,8 +66,8 @@
 }
 
 .current-project-sidebar:hover {
-  background: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: transparent;
+  border-bottom-color: rgba(255, 255, 255, 0.25);
 }
 
 .current-project-sidebar .project-info {
@@ -85,7 +86,7 @@
 
 .current-project-sidebar .project-code {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.65);
   font-family: monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -94,13 +95,14 @@
 }
 
 .current-project-sidebar .switch-icon {
-  font-size: 12px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.65);
   flex-shrink: 0;
 }
 
 .current-project-sidebar .anticon-bank {
   font-size: 16px;
+  color: rgba(255, 255, 255, 0.85);
   flex-shrink: 0;
 }
 

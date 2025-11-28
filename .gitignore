@@ -276,3 +276,4 @@ config/database.conf
 *.db
 *.sqlite
 *.sqlite3
+.playwright-mcp/
