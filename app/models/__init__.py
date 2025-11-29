@@ -267,11 +267,11 @@ class DatabaseManager:
             sys_info = system_info.get('system_info', {})
             
             # 直接提取各个组件
-                system_info_json = json.dumps(sys_info.get('system_info', {}))
+            system_info_json = json.dumps(sys_info.get('system_info', {}))
             network_info_json = json.dumps(sys_info.get('network_info', []))
-                memory_info_json = json.dumps(sys_info.get('memory_info', {}))
+            memory_info_json = json.dumps(sys_info.get('memory_info', {}))
             disk_info_json = json.dumps(sys_info.get('disk_info', []))
-                cpu_info_json = json.dumps(sys_info.get('cpu_info', {}))
+            cpu_info_json = json.dumps(sys_info.get('cpu_info', {}))
             
             cursor.execute('''
                 INSERT INTO agent_system_info
