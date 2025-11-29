@@ -374,6 +374,9 @@ qunkong/
 │   ├── DOCKER_BUILD.md              # Docker构建文档
 │   ├── IMAGE_BUILD_SUMMARY.md       # 镜像构建总结
 │   └── SQL_OPTIMIZATION.md          # SQL优化文档
+├── releases/                        # Agent发布目录
+│   ├── qunkong-agent-latest         # 最新Agent二进制
+│   └── README.md                    # 发布说明
 ├── docker-compose.yml               # Docker编排（开发）
 ├── docker-compose.prod.yml          # Docker编排（生产）
 ├── Dockerfile.frontend              # 前端镜像
