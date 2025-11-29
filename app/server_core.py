@@ -902,8 +902,12 @@ class QunkongServer:
         logger.info(f"代理终端连接: session={session_id}, agent={agent_id} -> node:{target_node}")
         
         try:
-            # 记录远程会话
-            self.remote_terminal_sessions[session_id] = target_node
+            # 记录远程会话信息（包含目标节点和前端WebSocket）
+            self.remote_terminal_sessions[session_id] = {
+                'target_node': target_node,
+                'websocket': websocket,
+                'agent_id': agent_id
+            }
             
             # 向目标节点发送终端初始化请求
             init_message = {
@@ -1120,6 +1124,9 @@ class QunkongServer:
         # 注册终端关闭请求处理器
         self.cluster.register_handler('terminal_close_request', self._handle_cluster_terminal_close)
         
+        # 注册终端响应处理器（接收远程节点的终端输出）
+        self.cluster.register_handler('terminal_response', self._handle_cluster_terminal_response)
+        
         logger.info("集群消息处理器已注册")
     
     async def _handle_cluster_terminal_init(self, data: dict):
@@ -1242,6 +1249,34 @@ class QunkongServer:
             
         except Exception as e:
             logger.error(f"处理集群终端关闭请求失败: {e}")
+
+    async def _handle_cluster_terminal_response(self, data: dict):
+        """处理集群终端响应（接收远程节点的终端输出，转发给前端）"""
+        try:
+            session_id = data.get('session_id')
+            message = data.get('data')
+            
+            # 获取远程会话信息
+            session_info = self.remote_terminal_sessions.get(session_id)
+            if not session_info:
+                logger.warning(f"远程会话不存在: {session_id}")
+                return
+            
+            # 获取前端 WebSocket
+            websocket = session_info.get('websocket')
+            if not websocket:
+                logger.warning(f"前端WebSocket不存在: {session_id}")
+                return
+            
+            # 转发终端输出到前端
+            try:
+                await websocket.send(message)
+                logger.debug(f"终端响应已转发到前端: session={session_id}")
+            except Exception as e:
+                logger.error(f"向前端发送终端响应失败: {e}")
+            
+        except Exception as e:
+            logger.error(f"处理集群终端响应失败: {e}")
 
     async def check_agent_heartbeats(self):
         """检查Agent心跳，将超时的Agent标记为离线"""
