@@ -269,7 +269,7 @@ class QunkongAgent:
             system_specific = {}
             try:
                 if platform.system() == 'Linux':
-                system_specific = self._get_linux_info()
+                    system_specific = self._get_linux_info()
             except Exception as e:
                 logger.warning("获取系统特定信息失败: {}".format(e))
                 system_specific = {}
@@ -604,10 +604,10 @@ class QunkongAgent:
                             script = '\n'.join(lines[1:])
                 else:
                     # Linux Shell脚本
-                interpreter = '/bin/bash'
+                    interpreter = '/bin/bash'
                     temp_script_path = os.path.join(temp_dir, temp_filename + '.sh')
-                if not script.startswith('#!'):
-                    script = '#!/bin/bash\n' + script
+                    if not script.startswith('#!'):
+                        script = '#!/bin/bash\n' + script
             
             # 将脚本内容写入临时文件
             # Windows PowerShell 有时需要 BOM
@@ -619,7 +619,7 @@ class QunkongAgent:
             # 给脚本文件添加执行权限 (Linux)
             if system_type != 'Windows':
                 try:
-            os.chmod(temp_script_path, 0o755)
+                    os.chmod(temp_script_path, 0o755)
                 except:
                     pass
             
@@ -630,8 +630,8 @@ class QunkongAgent:
                 if system_type == 'Windows':
                     # -ExecutionPolicy Bypass 允许执行未签名的脚本
                     cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-File', temp_script_path]
-            else:
-                cmd = ['/bin/bash', temp_script_path]
+                else:
+                    cmd = ['/bin/bash', temp_script_path]
             
             # 添加脚本参数
             if script_params:
