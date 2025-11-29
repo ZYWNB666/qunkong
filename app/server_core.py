@@ -1605,8 +1605,11 @@ class QunkongServer:
         self.session_cleanup_task = asyncio.create_task(self.cleanup_terminal_sessions())
         logger.info("终端会话清理任务已启动")
         
-        # 创建包装函数来处理path参数
-        async def websocket_handler(websocket, path):
+        # 创建包装函数来处理path参数（兼容新旧版本websockets）
+        async def websocket_handler(websocket, path=None):
+            # 新版 websockets (v13+) 不传 path 参数，从 websocket 对象获取
+            if path is None:
+                path = getattr(websocket, 'path', '/')
             await self.handle_client(websocket, path)
         
         try:
