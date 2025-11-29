@@ -427,7 +427,11 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     
     setTimeout(() => fitAddon.fit(), 100)
 
-    const wsUrl = `ws://${__WEBSOCKET_HOST__}:${__WEBSOCKET_PORT__}/terminal/${agentId}`
+    // 动态获取 WebSocket 地址：使用当前页面的 hostname，通过 nginx 代理
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsHost = window.location.hostname
+    const wsPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
+    const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/ws/terminal/${agentId}`
     const ws = new WebSocket(wsUrl)
     ws.binaryType = 'arraybuffer'
 

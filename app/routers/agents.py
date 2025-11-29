@@ -26,26 +26,40 @@ class CleanupRequest(BaseModel):
 async def get_agents(
     project_id: Optional[int] = Query(None, description="项目ID")
 ):
-    """获取Agent列表"""
+    """获取Agent列表（集群模式下从数据库获取，确保所有节点数据一致）"""
     server = get_server()
     
-    # 从数据库获取所有 Agent 信息
+    # 从数据库获取所有 Agent 信息（数据库是集群共享的）
     db_agents = server.db.get_all_agents()
-    db_agents_dict = {agent['id']: agent for agent in db_agents}
+    
+    # 本地内存中的 Agent（当前节点连接的）
+    local_agents = {agent.id: agent for agent in server.agents.values()}
     
     agents_list = []
-    for agent in server.agents.values():
-        db_agent = db_agents_dict.get(agent.id, {})
+    for db_agent in db_agents:
+        agent_id = db_agent['id']
+        local_agent = local_agents.get(agent_id)
+        
+        # 判断状态：优先使用本地实时状态，否则使用数据库状态
+        if local_agent:
+            # Agent 连接在当前节点
+            status = local_agent.status.upper()
+            last_heartbeat = local_agent.last_heartbeat
+        else:
+            # Agent 可能连接在其他节点，或者已离线
+            # 使用数据库中的状态
+            status = db_agent.get('status', 'OFFLINE').upper()
+            last_heartbeat = db_agent.get('last_heartbeat', '')
         
         agent_dict = {
-            'id': agent.id,
-            'hostname': agent.hostname,
-            'ip_address': agent.ip,
+            'id': agent_id,
+            'hostname': db_agent.get('hostname', 'Unknown'),
+            'ip_address': db_agent.get('ip_address', ''),
             'os_type': db_agent.get('os_type', 'unknown'),
             'os_version': db_agent.get('os_version', ''),
             'agent_version': db_agent.get('agent_version', '1.0.0'),
-            'status': agent.status.upper(),
-            'last_heartbeat': agent.last_heartbeat,
+            'status': status,
+            'last_heartbeat': last_heartbeat,
             'register_time': db_agent.get('register_time', ''),
             'cpu_count': db_agent.get('cpu_count', 0),
             'memory_total': db_agent.get('memory_total', 0),
