@@ -987,8 +987,16 @@ class QunkongServer:
         logger.info(f"连接建立时间: {connection_start_time.isoformat()}")
         
         # 检查是否是终端WebSocket连接
-        if path and path.startswith('/terminal/'):
-            agent_id = path.split('/')[-1]  # 从路径中提取agent_id
+        # 支持两种格式: /terminal/{agent_id} 或 /ws/terminal/{agent_id}
+        terminal_path = None
+        if path:
+            if path.startswith('/ws/terminal/'):
+                terminal_path = path[3:]  # 去掉 /ws 前缀
+            elif path.startswith('/terminal/'):
+                terminal_path = path
+        
+        if terminal_path:
+            agent_id = terminal_path.split('/')[-1]  # 从路径中提取agent_id
             logger.info(f"检测到终端WebSocket连接，agent_id: {agent_id}")
             await self.handle_terminal_websocket(websocket, agent_id)
             return
@@ -1607,9 +1615,24 @@ class QunkongServer:
         
         # 创建包装函数来处理path参数（兼容新旧版本websockets）
         async def websocket_handler(websocket, path=None):
-            # 新版 websockets (v13+) 不传 path 参数，从 websocket 对象获取
+            # 新版 websockets (v13+) 不传 path 参数，需要从多个地方尝试获取
             if path is None:
-                path = getattr(websocket, 'path', '/')
+                # 尝试从不同属性获取路径
+                path = getattr(websocket, 'path', None)
+                if not path or path == '/':
+                    # 尝试从 request 对象获取
+                    request = getattr(websocket, 'request', None)
+                    if request:
+                        path = getattr(request, 'path', None)
+                if not path or path == '/':
+                    # 尝试从 request_headers 获取原始路径
+                    headers = getattr(websocket, 'request_headers', None)
+                    if headers:
+                        # 检查 X-Original-URI 或其他头
+                        path = headers.get('X-Original-URI', '/')
+                if not path:
+                    path = '/'
+                logger.debug(f"WebSocket path 解析结果: {path}")
             await self.handle_client(websocket, path)
         
         try:
