@@ -14,6 +14,10 @@ on:
 env:
   AGENT_NAME: qunkong-agent
 
+# 需要 write 权限才能创建 release 和推送代码
+permissions:
+  contents: write
+
 jobs:
   build-agent:
     name: Build Agent for Linux
