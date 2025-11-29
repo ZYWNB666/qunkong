@@ -894,17 +894,17 @@ class QunkongAgent:
                  # Windows reboot
                  subprocess.run(['shutdown', '/r', '/t', '0'], check=False)
             else:
-            # 执行Linux重启命令
-            try:
-                # 尝试使用systemctl (systemd)
-                subprocess.run(['sudo', 'systemctl', 'reboot'], check=False, timeout=5)
-            except:
+                # 执行Linux重启命令
                 try:
-                    # 备用方案：使用reboot命令
-                    subprocess.run(['sudo', 'reboot'], check=False, timeout=5)
+                    # 尝试使用systemctl (systemd)
+                    subprocess.run(['sudo', 'systemctl', 'reboot'], check=False, timeout=5)
                 except:
-                    # 最后备用方案：使用shutdown命令
-                    subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
+                    try:
+                        # 备用方案：使用reboot命令
+                        subprocess.run(['sudo', 'reboot'], check=False, timeout=5)
+                    except:
+                        # 最后备用方案：使用shutdown命令
+                        subprocess.run(['sudo', 'shutdown', '-r', 'now'], check=False, timeout=5)
                 
         except Exception as e:
             logger.error("重启主机失败: {}".format(e))
