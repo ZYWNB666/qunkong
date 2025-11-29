@@ -1,0 +1,50 @@
+# 忽略node_modules（会在容器内重新安装）
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# 忽略构建输出
+dist
+build
+
+# 忽略版本控制
+.git
+.gitignore
+
+# 忽略IDE配置
+.vscode
+.idea
+*.swp
+*.swo
+
+# 忽略环境配置
+.env
+.env.local
+.env.*.local
+
+# 忽略测试
+test
+tests
+__tests__
+*.test.js
+*.test.jsx
+*.spec.js
+*.spec.jsx
+
+# 忽略日志
+*.log
+
+# 忽略临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 忽略文档
+README.md
+CHANGELOG.md
+
+# 不要忽略 nginx.conf（重要！）
+!nginx.conf
+
