@@ -1,12 +1,1 @@
-# WebSocket通信
-websockets==11.0.3
-
-# 系统监控和进程管理
-psutil==5.9.5
-
-# HTTP请求（用于获取外网IP等）
-requests==2.31.0
-
-pyinstaller>=5.0.0
-setuptools
-wheel
+PyInstaller==6.3.0

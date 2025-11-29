@@ -1,0 +1,166 @@
+name: Build and Release Agent
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'app/client.py'
+      - 'requirements-client.txt'
+      - '.github/workflows/build-agent.yml'
+  workflow_dispatch:
+
+env:
+  AGENT_NAME: qunkong-agent
+
+jobs:
+  build-agent:
+    name: Build Agent for Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r test/requirements-build.txt
+          pip install -r requirements-client.txt
+
+      - name: Build Agent
+        run: |
+          python test/build_client.py
+          
+      - name: Check build result
+        run: |
+          if [ -f "dist/${{ env.AGENT_NAME }}" ]; then
+            echo "✓ Agent build successful"
+            ls -lh dist/${{ env.AGENT_NAME }}
+            file dist/${{ env.AGENT_NAME }}
+          else
+            echo "✗ Agent build failed"
+            exit 1
+          fi
+
+      - name: Generate version info
+        id: version
+        run: |
+          VERSION_DATE=$(date -u +'%Y%m%d%H%M%S')
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          VERSION_TAG="v${VERSION_DATE}-${COMMIT_SHA}"
+          echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+          echo "version_date=${VERSION_DATE}" >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          
+          # 创建版本信息文件
+          cat > dist/VERSION.txt << EOF
+          Qunkong Agent
+          Version: ${VERSION_TAG}
+          Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          Commit: ${COMMIT_SHA}
+          Platform: Linux x86_64
+          EOF
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: agent-${{ steps.version.outputs.version_tag }}
+          release_name: Agent ${{ steps.version.outputs.version_tag }}
+          body: |
+            ## Qunkong Agent 自动构建
+
+            **构建信息**
+            - 构建时间: ${{ steps.version.outputs.version_date }}
+            - Commit SHA: ${{ steps.version.outputs.commit_sha }}
+            - 平台: Linux x86_64
+
+            **使用方法**
+            ```bash
+            # 下载Agent
+            wget https://github.com/${{ github.repository }}/releases/download/agent-${{ steps.version.outputs.version_tag }}/${{ env.AGENT_NAME }}
+
+            # 添加执行权限
+            chmod +x ${{ env.AGENT_NAME }}
+
+            # 启动Agent
+            ./${{ env.AGENT_NAME }} --server SERVER_IP --port 8765
+            ```
+
+            **更新内容**
+            基于 commit [${{ steps.version.outputs.commit_sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ steps.version.outputs.commit_sha }}) 自动构建
+
+          draft: false
+          prerelease: false
+
+      - name: Upload Agent Binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist/${{ env.AGENT_NAME }}
+          asset_name: ${{ env.AGENT_NAME }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload Version Info
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist/VERSION.txt
+          asset_name: VERSION.txt
+          asset_content_type: text/plain
+
+      - name: Commit Agent to Repository
+        run: |
+          # 创建 releases 目录
+          mkdir -p releases
+          
+          # 复制Agent到releases目录
+          cp dist/${{ env.AGENT_NAME }} releases/${{ env.AGENT_NAME }}-latest
+          cp dist/${{ env.AGENT_NAME }} releases/${{ env.AGENT_NAME }}-${{ steps.version.outputs.version_date }}
+          cp dist/VERSION.txt releases/VERSION-latest.txt
+          
+          # 配置Git
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 添加并提交
+          git add releases/
+          git commit -m "build: 更新Agent二进制文件 - ${{ steps.version.outputs.version_tag }}" || echo "No changes to commit"
+          
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+
+      - name: Summary
+        run: |
+          echo "## 🎉 Agent构建成功！" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**版本信息**" >> $GITHUB_STEP_SUMMARY
+          echo "- 版本号: \`${{ steps.version.outputs.version_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 构建时间: \`${{ steps.version.outputs.version_date }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ steps.version.outputs.commit_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**文件信息**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/${{ env.AGENT_NAME }} >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**下载地址**" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest: \`releases/${{ env.AGENT_NAME }}-latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Release: [agent-${{ steps.version.outputs.version_tag }}](${{ steps.create_release.outputs.html_url }})" >> $GITHUB_STEP_SUMMARY

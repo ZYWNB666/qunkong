@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QueenBee Agent 客户端打包脚本
+Qunkong Agent 客户端打包脚本
 """
 import os
 import sys
@@ -71,7 +71,7 @@ def build_executable():
     return result.returncode == 0
 
 def main():
-    print("QueenBee Agent 打包工具")
+    print("Qunkong Agent 打包工具")
     print("=" * 40)
     
     if not os.path.exists('app/client.py'):
