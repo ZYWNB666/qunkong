@@ -946,6 +946,7 @@ class QunkongServer:
                             try:
                                 data = json.loads(message)
                                 if isinstance(data, dict):
+                                    # 结构化消息（如 terminal_input, terminal_resize）
                                     data['session_id'] = session_id
                                     forward_msg = {
                                         'type': 'terminal_forward_message',
@@ -953,7 +954,17 @@ class QunkongServer:
                                         'data': data
                                     }
                                     await self.cluster.send_to_node(target_node, forward_msg)
+                                else:
+                                    # JSON解析成功但不是dict（如数字、字符串），作为原始输入转发
+                                    forward_msg = {
+                                        'type': 'terminal_forward_input',
+                                        'session_id': session_id,
+                                        'data': message,
+                                        'is_binary': False
+                                    }
+                                    await self.cluster.send_to_node(target_node, forward_msg)
                             except json.JSONDecodeError:
+                                # 非JSON格式，直接作为终端输入转发
                                 forward_msg = {
                                     'type': 'terminal_forward_input',
                                     'session_id': session_id,

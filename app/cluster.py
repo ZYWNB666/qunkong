@@ -141,7 +141,7 @@ class ClusterManager:
                 await asyncio.sleep(5)
     
     async def _pubsub_loop(self):
-        """订阅循环 - 监听节点消息"""
+        """订阅循环 - 监听节点消息（优化延迟）"""
         try:
             # 订阅当前节点的消息频道
             pubsub = self.redis.pubsub()
@@ -151,7 +151,8 @@ class ClusterManager:
             
             while self.running:
                 try:
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    # 优化：减少超时时间，提高响应速度
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.01)
                     
                     if message and message['type'] == 'message':
                         try:
@@ -159,11 +160,14 @@ class ClusterManager:
                             await self._handle_message(data)
                         except json.JSONDecodeError as e:
                             logger.error(f"消息解析失败: {e}")
+                        # 有消息时不等待，立即检查下一条
+                        continue
                     
-                    await asyncio.sleep(0.1)
+                    # 没有消息时短暂等待，避免CPU空转
+                    await asyncio.sleep(0.005)
                 except Exception as e:
                     logger.error(f"处理订阅消息失败: {e}")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.1)
             
             await pubsub.unsubscribe(f'node:{self.node_id}')
             await pubsub.close()
