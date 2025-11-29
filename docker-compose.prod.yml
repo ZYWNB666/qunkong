@@ -26,7 +26,7 @@ services:
 
   # 后端服务（使用阿里云镜像）
   backend:
-    image: registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:latest
+    image: registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-latest
     container_name: qunkong-backend
     restart: unless-stopped
     ports:
@@ -48,7 +48,7 @@ services:
 
   # 前端服务（使用阿里云镜像）
   frontend:
-    image: registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend:latest
+    image: registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-latest
     container_name: qunkong-frontend
     restart: unless-stopped
     ports:

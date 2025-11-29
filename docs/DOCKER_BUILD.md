@@ -16,19 +16,27 @@
 
 ## 镜像命名规则
 
-构建后的镜像会自动推送到阿里云镜像仓库，命名规则如下：
+构建后的镜像会自动推送到阿里云镜像仓库：
 
-### Backend 镜像
-- **仓库地址**: `registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend`
-- **标签规则**:
-  - `latest` - 最新的 main/master 分支版本
-  - `main-<sha>` 或 `master-<sha>` - 带 Git SHA 的分支版本
-  - `v1.0.0` - 使用 Git Tag 版本号
-  - `1.0` - 主次版本号
+### 镜像仓库
+- **仓库地址**: `registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong`
 
-### Frontend 镜像
-- **仓库地址**: `registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend`
-- **标签规则**: 同 Backend
+### 标签规则
+- **Backend 镜像**:
+  - `backend-{时间戳}` - 带时间戳的版本（格式：YYYYMMDDHHmmss，精确到秒）
+  - `backend-latest` - 最新版本
+
+- **Frontend 镜像**:
+  - `frontend-{时间戳}` - 带时间戳的版本（格式：YYYYMMDDHHmmss，精确到秒）
+  - `frontend-latest` - 最新版本
+
+### 示例
+```
+registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-20251129053012
+registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-latest
+registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-20251129053012
+registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-latest
+```
 
 ## 触发构建
 
@@ -57,15 +65,12 @@
 docker login --username=youwei886 --password=zhangyouwei886123 registry.cn-shanghai.aliyuncs.com
 
 # 拉取最新版本
-docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:latest
-docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend:latest
+docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-latest
+docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-latest
 
-# 拉取特定版本（例如 v1.0.0）
-docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:v1.0.0
-docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend:v1.0.0
-
-# 拉取特定 commit SHA 版本
-docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:main-abc1234
+# 拉取特定时间戳版本
+docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-20251129053012
+docker pull registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-20251129053012
 ```
 
 ## 使用镜像部署
@@ -80,50 +85,28 @@ docker run -d \
   -p 8765:8765 \
   -v $(pwd)/config:/app/config \
   -v $(pwd)/logs:/app/logs \
-  registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:latest
+  registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:backend-latest
 
 # 运行 Frontend
 docker run -d \
   --name qunkong-frontend \
   -p 3000:80 \
-  registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend:latest
+  registry.cn-shanghai.aliyuncs.com/zywdockers/qunkong:frontend-latest
 ```
 
 ### 方式 2: 使用 docker-compose
 
-修改 `docker-compose.yml` 文件，将 `build` 部分替换为 `image`：
-
-```yaml
-version: '3.8'
-
-services:
-  backend:
-    image: registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-backend:latest
-    container_name: qunkong-backend
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-      - "8765:8765"
-    volumes:
-      - ./config:/app/config
-      - ./logs:/app/logs
-    network_mode: "host"
-
-  frontend:
-    image: registry.cn-shanghai.aliyuncs.com/zywdockers/images/qunkong-frontend:latest
-    container_name: qunkong-frontend
-    restart: unless-stopped
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-```
-
-然后运行：
+使用项目中的 `docker-compose.prod.yml` 文件：
 
 ```bash
-docker-compose pull
-docker-compose up -d
+# 登录阿里云
+docker login --username=youwei886 --password=zhangyouwei886123 registry.cn-shanghai.aliyuncs.com
+
+# 拉取最新镜像
+docker-compose -f docker-compose.prod.yml pull
+
+# 启动服务
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
 ## 查看构建状态

@@ -15,9 +15,7 @@ on:
 
 env:
   REGISTRY: registry.cn-shanghai.aliyuncs.com
-  NAMESPACE: zywdockers/images
-  BACKEND_IMAGE: qunkong-backend
-  FRONTEND_IMAGE: qunkong-frontend
+  IMAGE_NAME: zywdockers/qunkong
 
 jobs:
   build-backend:
@@ -37,18 +35,9 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.BACKEND_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Generate timestamp
+        id: timestamp
+        run: echo "time=$(date -u +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
 
       - name: Build and push Backend
         uses: docker/build-push-action@v5
@@ -56,8 +45,9 @@ jobs:
           context: .
           file: ./Dockerfile.backend
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:backend-${{ steps.timestamp.outputs.time }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:backend-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -79,18 +69,9 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.FRONTEND_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Generate timestamp
+        id: timestamp
+        run: echo "time=$(date -u +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
 
       - name: Build and push Frontend
         uses: docker/build-push-action@v5
@@ -98,8 +79,9 @@ jobs:
           context: ./web
           file: ./Dockerfile.frontend
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:frontend-${{ steps.timestamp.outputs.time }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:frontend-latest
           build-args: |
             VITE_API_URL=${{ secrets.VITE_API_URL || 'http://localhost:5000' }}
             VITE_WS_URL=${{ secrets.VITE_WS_URL || 'ws://localhost:8765' }}
