@@ -15,9 +15,9 @@ from datetime import datetime
 
 # 平台相关导入
 try:
-import pty
-import termios
-import fcntl
+    import pty
+    import termios
+    import fcntl
     import struct
 except ImportError:
     pty = None

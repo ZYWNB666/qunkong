@@ -320,96 +320,96 @@ const ExecutionHistory = () => {
                           </div>
                         )}
                         {Object.entries(resultsToRender).map(([hostId, result]) => {
-                          // 根据 exit_code 判断成功还是失败
-                          const isSuccess = result.exit_code === 0
+                    // 根据 exit_code 判断成功还是失败
+                    const isSuccess = result.exit_code === 0
                           const hostname = result.agent_hostname || result.hostname || '未知主机'
                           const ip = result.agent_ip || result.ip || ''
-                          
-                          // 合并所有输出
-                          const stdout = result.stdout || result.output || ''
-                          const stderr = result.stderr || result.error || ''
-                          const combinedOutput = [stdout, stderr].filter(Boolean).join('\n')
-                          
-                          return (
-                            <div key={hostId} style={{ 
-                              marginBottom: 16,
-                              background: '#fff',
+                    
+                    // 合并所有输出
+                    const stdout = result.stdout || result.output || ''
+                    const stderr = result.stderr || result.error || ''
+                    const combinedOutput = [stdout, stderr].filter(Boolean).join('\n')
+                    
+                    return (
+                      <div key={hostId} style={{ 
+                        marginBottom: 16,
+                        background: '#fff',
+                        padding: 12,
+                        borderRadius: 4,
+                        border: '1px solid #e8e8e8'
+                      }}>
+                        <div style={{ 
+                          fontWeight: 'bold', 
+                          marginBottom: 12,
+                          borderBottom: '2px solid #e8e8e8',
+                          paddingBottom: 8,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}>
+                          <div>
+                            <DesktopOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+                            <span style={{ fontSize: 16 }}>{hostname}</span>
+                            {ip && (
+                              <span style={{ marginLeft: 12, fontSize: 12, color: '#999', fontWeight: 'normal' }}>
+                                ({ip})
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <Tag 
+                              color={isSuccess ? 'success' : 'error'}
+                              style={{ fontSize: 14, padding: '4px 12px' }}
+                            >
+                              {isSuccess ? '✓ 成功' : '✗ 失败'}
+                            </Tag>
+                            <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
+                                    退出码: {result.exit_code !== undefined ? result.exit_code : 'N/A'}
+                            </span>
+                            {result.execution_time && (
+                              <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
+                                耗时: {result.execution_time.toFixed(2)}s
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {combinedOutput ? (
+                          <div>
+                            <div style={{ 
+                              fontSize: 13, 
+                              color: '#666', 
+                              marginBottom: 6,
+                              fontWeight: 'bold'
+                            }}>
+                              📋 执行输出:
+                            </div>
+                            <pre style={{
+                              background: isSuccess ? '#f5f5f5' : '#fff1f0',
                               padding: 12,
                               borderRadius: 4,
-                              border: '1px solid #e8e8e8'
+                              maxHeight: 500,
+                              overflow: 'auto',
+                              margin: 0,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              fontSize: 13,
+                              lineHeight: 1.6,
+                              border: `1px solid ${isSuccess ? '#d9d9d9' : '#ffccc7'}`,
+                              color: isSuccess ? '#000' : '#cf1322'
                             }}>
-                              <div style={{ 
-                                fontWeight: 'bold', 
-                                marginBottom: 12,
-                                borderBottom: '2px solid #e8e8e8',
-                                paddingBottom: 8,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between'
-                              }}>
-                                <div>
-                                  <DesktopOutlined style={{ marginRight: 8, color: '#1890ff' }} />
-                                  <span style={{ fontSize: 16 }}>{hostname}</span>
-                                  {ip && (
-                                    <span style={{ marginLeft: 12, fontSize: 12, color: '#999', fontWeight: 'normal' }}>
-                                      ({ip})
-                                    </span>
-                                  )}
-                                </div>
-                                <div>
-                                  <Tag 
-                                    color={isSuccess ? 'success' : 'error'}
-                                    style={{ fontSize: 14, padding: '4px 12px' }}
-                                  >
-                                    {isSuccess ? '✓ 成功' : '✗ 失败'}
-                                  </Tag>
-                                  <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
-                                    退出码: {result.exit_code !== undefined ? result.exit_code : 'N/A'}
-                                  </span>
-                                  {result.execution_time && (
-                                    <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
-                                      耗时: {result.execution_time.toFixed(2)}s
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              {combinedOutput ? (
-                                <div>
-                                  <div style={{ 
-                                    fontSize: 13, 
-                                    color: '#666', 
-                                    marginBottom: 6,
-                                    fontWeight: 'bold'
-                                  }}>
-                                    📋 执行输出:
-                                  </div>
-                                  <pre style={{
-                                    background: isSuccess ? '#f5f5f5' : '#fff1f0',
-                                    padding: 12,
-                                    borderRadius: 4,
-                                    maxHeight: 500,
-                                    overflow: 'auto',
-                                    margin: 0,
-                                    whiteSpace: 'pre-wrap',
-                                    wordBreak: 'break-word',
-                                    fontSize: 13,
-                                    lineHeight: 1.6,
-                                    border: `1px solid ${isSuccess ? '#d9d9d9' : '#ffccc7'}`,
-                                    color: isSuccess ? '#000' : '#cf1322'
-                                  }}>
-                                    {combinedOutput}
-                                  </pre>
-                                </div>
-                              ) : (
-                                <div style={{ 
-                                  color: '#999', 
-                                  fontStyle: 'italic',
-                                  textAlign: 'center',
-                                  padding: 20
-                                }}>
-                                  📭 无输出内容
-                                </div>
-                              )}
+                              {combinedOutput}
+                            </pre>
+                          </div>
+                        ) : (
+                          <div style={{ 
+                            color: '#999', 
+                            fontStyle: 'italic',
+                            textAlign: 'center',
+                            padding: 20
+                          }}>
+                            📭 无输出内容
+                          </div>
+                        )}
                             </div>
                           )
                         })}
