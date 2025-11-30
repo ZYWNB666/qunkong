@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Table, Button, Space, Tag, Modal, Form, Input, Select, message } from 'antd'
-import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
-import { usersApi } from '../utils/api'
+import { Card, Table, Button, Space, Tag, Modal, Form, Input, Select, message, Divider, Switch } from 'antd'
+import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, ProjectOutlined } from '@ant-design/icons'
+import { usersApi, projectsApi } from '../utils/api'
 
 const UserManagement = () => {
   const [loading, setLoading] = useState(false)
@@ -9,20 +9,47 @@ const UserManagement = () => {
   const [modalVisible, setModalVisible] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
   const [form] = Form.useForm()
+  const [allProjects, setAllProjects] = useState([])
+  const [loadingProjects, setLoadingProjects] = useState(false)
 
   useEffect(() => {
     loadUsers()
+    loadProjects()
   }, [])
+
+  const loadProjects = async () => {
+    try {
+      setLoadingProjects(true)
+      const response = await projectsApi.getProjects({ page: 1, page_size: 100 })
+      setAllProjects(response.projects || [])
+    } catch (error) {
+      console.error('加载项目列表失败:', error)
+    } finally {
+      setLoadingProjects(false)
+    }
+  }
 
   const loadUsers = async () => {
     try {
       setLoading(true)
-      const response = await usersApi.getUsers()
+      const response = await usersApi.getUsers({ page: 1, page_size: 100 })
       setUsers(response.users || [])
     } catch (error) {
+      console.error('加载用户列表失败:', error)
       message.error('加载用户列表失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleToggleUserStatus = async (userId, isActive) => {
+    try {
+      await usersApi.updateUser(userId, { is_active: isActive })
+      message.success(`用户已${isActive ? '激活' : '禁用'}`)
+      loadUsers()
+    } catch (error) {
+      message.error('状态更新失败')
+      loadUsers() // 刷新列表以恢复原状态
     }
   }
 
@@ -32,9 +59,37 @@ const UserManagement = () => {
     setModalVisible(true)
   }
 
-  const handleEdit = (user) => {
+  const handleEdit = async (user) => {
     setEditingUser(user)
-    form.setFieldsValue(user)
+    form.setFieldsValue({
+      username: user.username,
+      email: user.email,
+      role: user.role
+    })
+    
+    // 加载用户的项目分配
+    try {
+      const response = await projectsApi.getMyProjects()
+      const userProjects = (response.projects || [])
+        .filter(p => p.members && p.members.some(m => m.user_id === user.id))
+        .map(p => {
+          const member = p.members.find(m => m.user_id === user.id)
+          return {
+            project_id: p.id,
+            role: member.role
+          }
+        })
+      
+      form.setFieldsValue({
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        project_roles: userProjects
+      })
+    } catch (error) {
+      console.error('加载用户项目失败:', error)
+    }
+    
     setModalVisible(true)
   }
 
@@ -99,13 +154,16 @@ const UserManagement = () => {
     },
     {
       title: '状态',
-      dataIndex: 'status',
-      key: 'status',
+      dataIndex: 'is_active',
+      key: 'is_active',
       width: 100,
-      render: status => (
-        <Tag color={status === 'active' ? 'success' : 'default'}>
-          {status === 'active' ? '激活' : '禁用'}
-        </Tag>
+      render: (is_active, record) => (
+        <Switch
+          checked={is_active}
+          checkedChildren="激活"
+          unCheckedChildren="禁用"
+          onChange={(checked) => handleToggleUserStatus(record.id, checked)}
+        />
       )
     },
     {
@@ -169,6 +227,7 @@ const UserManagement = () => {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
+        width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item
@@ -176,7 +235,7 @@ const UserManagement = () => {
             name="username"
             rules={[{ required: true, message: '请输入用户名' }]}
           >
-            <Input />
+            <Input placeholder="请输入用户名" />
           </Form.Item>
 
           <Form.Item
@@ -187,7 +246,7 @@ const UserManagement = () => {
               { type: 'email', message: '请输入正确的邮箱格式' }
             ]}
           >
-            <Input />
+            <Input placeholder="请输入邮箱" />
           </Form.Item>
 
           {!editingUser && (
@@ -196,19 +255,81 @@ const UserManagement = () => {
               name="password"
               rules={[{ required: true, message: '请输入密码' }]}
             >
-              <Input.Password />
+              <Input.Password placeholder="请输入密码（至少6位）" />
             </Form.Item>
           )}
 
           <Form.Item
-            label="角色"
+            label="系统角色"
             name="role"
-            rules={[{ required: true, message: '请选择角色' }]}
+            rules={[{ required: true, message: '请选择系统角色' }]}
+            tooltip="系统角色决定了用户在整个系统中的基本权限"
           >
-            <Select>
-              <Select.Option value="user">用户</Select.Option>
-              <Select.Option value="admin">管理员</Select.Option>
+            <Select placeholder="请选择系统角色">
+              <Select.Option value="user">普通用户</Select.Option>
+              <Select.Option value="admin">系统管理员</Select.Option>
             </Select>
+          </Form.Item>
+
+          <Divider orientation="left">
+            <Space>
+              <ProjectOutlined />
+              <span>项目分配</span>
+            </Space>
+          </Divider>
+
+          <Form.Item
+            label="可见项目及角色"
+            tooltip="为用户分配项目访问权限和项目内角色"
+          >
+            <Form.List name="project_roles">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'project_id']}
+                        rules={[{ required: true, message: '请选择项目' }]}
+                        style={{ marginBottom: 0, width: 250 }}
+                      >
+                        <Select
+                          placeholder="选择项目"
+                          loading={loadingProjects}
+                          filterOption={(input, option) =>
+                            option.children.toLowerCase().includes(input.toLowerCase())
+                          }
+                        >
+                          {allProjects.map(project => (
+                            <Select.Option key={project.id} value={project.id}>
+                              {project.project_name}
+                            </Select.Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'role']}
+                        rules={[{ required: true, message: '请选择角色' }]}
+                        style={{ marginBottom: 0, width: 150 }}
+                      >
+                        <Select placeholder="项目角色">
+                          <Select.Option value="admin">项目管理员</Select.Option>
+                          <Select.Option value="member">项目成员</Select.Option>
+                          <Select.Option value="readonly">只读成员</Select.Option>
+                        </Select>
+                      </Form.Item>
+                      <Button type="link" danger onClick={() => remove(name)}>
+                        删除
+                      </Button>
+                    </Space>
+                  ))}
+                  <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                    添加项目
+                  </Button>
+                </>
+              )}
+            </Form.List>
           </Form.Item>
 
           <Form.Item>

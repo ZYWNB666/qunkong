@@ -387,6 +387,21 @@ class SimpleJobManager:
             print(f"删除主机组失败: {e}")
             return False
     
+    def delete_all_host_groups(self, job_id: str) -> bool:
+        """删除作业的所有主机组"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM simple_job_host_groups WHERE job_id = %s', (job_id,))
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"删除所有主机组失败: {e}")
+            return False
+    
     def get_host_groups(self, job_id: str) -> List[Dict]:
         """获取作业的所有主机组"""
         try:
@@ -482,6 +497,21 @@ class SimpleJobManager:
             
         except Exception as e:
             print(f"删除变量失败: {e}")
+            return False
+    
+    def delete_all_variables(self, job_id: str) -> bool:
+        """删除作业的所有变量"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM simple_job_variables WHERE job_id = %s', (job_id,))
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"删除所有变量失败: {e}")
             return False
     
     def get_variables(self, job_id: str) -> List[Dict]:
@@ -598,6 +628,21 @@ class SimpleJobManager:
             
         except Exception as e:
             print(f"删除作业步骤失败: {e}")
+            return False
+    
+    def delete_all_steps(self, job_id: str) -> bool:
+        """删除作业的所有步骤"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM simple_job_steps WHERE job_id = %s', (job_id,))
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"删除所有步骤失败: {e}")
             return False
     
     def get_steps(self, job_id: str) -> List[Dict]:

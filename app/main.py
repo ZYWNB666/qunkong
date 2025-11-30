@@ -18,8 +18,9 @@ from app.server_core import QunkongServer
 from app.cluster import ClusterManager
 from app.models.auth import AuthManager
 from app.routers.deps import set_server_instance, set_auth_manager
+from app.routers.rbac import PermissionChecker
 from app.routers import (
-    auth_router, agents_router, tasks_router, jobs_router,
+    auth_router, agents_router, agent_install_router, tasks_router, jobs_router,
     simple_jobs_router, users_router, projects_router, tenants_router
 )
 
@@ -139,6 +140,10 @@ def create_app() -> FastAPI:
     # 初始化认证管理器
     auth_manager = AuthManager(websocket_server.db)
     
+    # 初始化权限检查器
+    PermissionChecker.initialize(websocket_server.db)
+    logger.info("RBAC权限检查器已初始化")
+    
     # 设置全局实例
     set_server_instance(websocket_server)
     set_auth_manager(auth_manager)
@@ -194,8 +199,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
-    # 注册路由
+    # 注册路由（注意顺序：更具体的路由要先注册，避免被通配路由匹配）
     app.include_router(auth_router)
+    app.include_router(agent_install_router)  # 先注册，避免被agents_router的通配路由匹配
     app.include_router(agents_router)
     app.include_router(tasks_router)
     app.include_router(jobs_router)

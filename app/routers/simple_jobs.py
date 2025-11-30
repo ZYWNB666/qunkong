@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 from app.routers.deps import get_current_user, get_server
+from app.routers.rbac import require_permission, require_project_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/simple-jobs", tags=["简单作业"])
@@ -61,12 +62,12 @@ class ExecuteJobRequest(BaseModel):
 
 @router.get("/executions")
 async def get_all_executions(
-    project_id: int = Query(..., description="项目ID"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取所有作业执行历史"""
+    project_id = current_user.get('current_project_id')
     server = get_server()
     
     from app.models.simple_jobs import SimpleJobManager
@@ -88,9 +89,10 @@ async def get_all_executions(
 @router.get("/executions/{execution_id}")
 async def get_execution_detail(
     execution_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_project_access)
 ):
     """获取执行详情"""
+    project_id = current_user.get('current_project_id')
     server = get_server()
     
     from app.models.simple_jobs import SimpleJobManager
@@ -105,12 +107,12 @@ async def get_execution_detail(
 
 @router.get("")
 async def get_simple_jobs(
-    project_id: int = Query(..., description="项目ID"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取简单作业列表"""
+    project_id = current_user.get('current_project_id')
     server = get_server()
     
     from app.models.simple_jobs import SimpleJobManager
@@ -134,7 +136,7 @@ async def get_simple_jobs(
 @router.get("/{job_id}")
 async def get_simple_job(
     job_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取简单作业详情"""
     server = get_server()
@@ -152,7 +154,7 @@ async def get_simple_job(
 @router.post("")
 async def create_simple_job(
     data: CreateJobRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.create'))
 ):
     """创建简单作业"""
     server = get_server()
@@ -237,10 +239,10 @@ async def create_simple_job(
 @router.put("/{job_id}")
 async def update_simple_job(
     job_id: str,
-    data: UpdateJobRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    data: CreateJobRequest,
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
-    """更新简单作业基本信息"""
+    """完整更新简单作业（包括步骤、主机组、变量）"""
     server = get_server()
     
     from app.models.simple_jobs import SimpleJobManager
@@ -250,24 +252,155 @@ async def update_simple_job(
     if not job:
         raise HTTPException(status_code=404, detail="作业不存在")
     
-    update_params = {}
-    if data.name is not None:
-        update_params['name'] = data.name
-    if data.description is not None:
-        update_params['description'] = data.description
+    logger.info(f"更新作业: job_id={job_id}, name={data.name}")
     
-    if update_params:
-        success = job_manager.update_job(job_id=job_id, **update_params)
+    # 1. 更新基本信息
+    if data.name or data.description is not None:
+        success = job_manager.update_job(
+            job_id=job_id,
+            name=data.name,
+            description=data.description
+        )
         if not success:
-            raise HTTPException(status_code=500, detail="更新作业失败")
+            raise HTTPException(status_code=500, detail="更新作业基本信息失败")
     
-    return {'message': '作业更新成功'}
+    # 2. 删除所有旧的主机组、变量、步骤
+    job_manager.delete_all_host_groups(job_id)
+    job_manager.delete_all_variables(job_id)
+    job_manager.delete_all_steps(job_id)
+    
+    # 3. 重新创建主机组
+    host_group_ids = []
+    if data.host_groups:
+        for hg in data.host_groups:
+            group_id = job_manager.add_host_group(
+                job_id=job_id,
+                group_name=hg.group_name,
+                host_ids=hg.host_ids
+            )
+            host_group_ids.append(group_id)
+            if group_id:
+                logger.info(f"主机组创建成功: {hg.group_name} -> {group_id}")
+    
+    # 4. 重新创建变量
+    if data.variables:
+        for var in data.variables:
+            job_manager.add_variable(
+                job_id=job_id,
+                var_name=var.var_name,
+                var_value=var.var_value
+            )
+            logger.info(f"变量创建成功: {var.var_name}={var.var_value}")
+    
+    # 5. 重新创建步骤
+    steps_created = 0
+    if data.steps:
+        for i, step in enumerate(data.steps):
+            host_group_id = None
+            if step.host_group_id:
+                host_group_id = step.host_group_id
+            elif step.host_group_index is not None and step.host_group_index < len(host_group_ids):
+                host_group_id = host_group_ids[step.host_group_index]
+            
+            step_id = job_manager.add_step(
+                job_id=job_id,
+                step_name=step.step_name,
+                script_content=step.script_content,
+                host_group_id=host_group_id,
+                step_order=step.step_order or (i + 1),
+                timeout=step.timeout
+            )
+            if step_id:
+                steps_created += 1
+                logger.info(f"步骤创建成功: {step.step_name}")
+    
+    logger.info(f"作业 {job_id} 更新完成: {steps_created} 个步骤")
+    
+    return {
+        'message': '作业更新成功',
+        'host_groups_updated': len(host_group_ids),
+        'steps_updated': steps_created
+    }
+
+
+@router.post("/{job_id}/clone")
+async def clone_simple_job(
+    job_id: str,
+    current_user: Dict[str, Any] = Depends(require_permission('job.create'))
+):
+    """克隆作业"""
+    server = get_server()
+    
+    from app.models.simple_jobs import SimpleJobManager
+    job_manager = SimpleJobManager(server.db)
+    
+    # 获取原作业
+    original_job = job_manager.get_job(job_id)
+    if not original_job:
+        raise HTTPException(status_code=404, detail="作业不存在")
+    
+    logger.info(f"克隆作业: {original_job['name']}")
+    
+    # 创建新作业，名称加上"[ 复制 ]"前缀
+    new_name = f"[ 复制 ] {original_job['name']}"
+    new_job_id = job_manager.create_job(
+        name=new_name,
+        description=original_job['description'],
+        project_id=original_job['project_id'],
+        created_by=current_user['user_id']
+    )
+    
+    if not new_job_id:
+        raise HTTPException(status_code=500, detail="克隆作业失败")
+    
+    # 复制主机组
+    host_group_mapping = {}  # 旧ID -> 新ID
+    for hg in original_job.get('host_groups', []):
+        new_group_id = job_manager.add_host_group(
+            job_id=new_job_id,
+            group_name=hg['group_name'],
+            host_ids=hg['host_ids']
+        )
+        if new_group_id:
+            host_group_mapping[hg['id']] = new_group_id
+    
+    # 复制变量
+    for var in original_job.get('variables', []):
+        job_manager.add_variable(
+            job_id=new_job_id,
+            var_name=var['var_name'],
+            var_value=var['var_value']
+        )
+    
+    # 复制步骤
+    for step in original_job.get('steps', []):
+        # 映射主机组ID
+        new_host_group_id = None
+        if step['host_group_id'] and step['host_group_id'] in host_group_mapping:
+            new_host_group_id = host_group_mapping[step['host_group_id']]
+        
+        job_manager.add_step(
+            job_id=new_job_id,
+            step_name=step['step_name'],
+            script_content=step['script_content'],
+            host_group_id=new_host_group_id,
+            step_order=step['step_order'],
+            timeout=step['timeout']
+        )
+    
+    logger.info(f"作业克隆完成: {new_job_id}")
+    
+    return {
+        'message': '作业克隆成功',
+        'job_id': new_job_id,
+        'new_name': new_name
+    }
 
 
 @router.delete("/{job_id}")
 async def delete_simple_job(
     job_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.delete'))
 ):
     """删除简单作业"""
     server = get_server()
@@ -292,7 +425,7 @@ async def delete_simple_job(
 async def add_host_group(
     job_id: str,
     data: HostGroupRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """添加主机组"""
     server = get_server()
@@ -319,7 +452,7 @@ async def add_host_group(
 @router.get("/{job_id}/host-groups")
 async def get_host_groups(
     job_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取作业的所有主机组"""
     server = get_server()
@@ -336,7 +469,7 @@ async def update_host_group(
     job_id: str,
     group_id: str,
     data: HostGroupRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """更新主机组"""
     server = get_server()
@@ -360,7 +493,7 @@ async def update_host_group(
 async def delete_host_group(
     job_id: str,
     group_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """删除主机组"""
     server = get_server()
@@ -381,7 +514,7 @@ async def delete_host_group(
 async def add_variable(
     job_id: str,
     data: VariableRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """添加变量"""
     server = get_server()
@@ -408,7 +541,7 @@ async def add_variable(
 @router.get("/{job_id}/variables")
 async def get_variables(
     job_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取作业的所有变量"""
     server = get_server()
@@ -425,7 +558,7 @@ async def update_variable(
     job_id: str,
     var_id: str,
     data: VariableRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """更新变量"""
     server = get_server()
@@ -449,7 +582,7 @@ async def update_variable(
 async def delete_variable(
     job_id: str,
     var_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """删除变量"""
     server = get_server()
@@ -470,7 +603,7 @@ async def delete_variable(
 async def add_step(
     job_id: str,
     data: StepRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """添加步骤"""
     server = get_server()
@@ -500,7 +633,7 @@ async def add_step(
 @router.get("/{job_id}/steps")
 async def get_steps(
     job_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取作业的所有步骤"""
     server = get_server()
@@ -517,7 +650,7 @@ async def update_step(
     job_id: str,
     step_id: str,
     data: StepRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """更新步骤"""
     server = get_server()
@@ -544,7 +677,7 @@ async def update_step(
 async def delete_step(
     job_id: str,
     step_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.edit'))
 ):
     """删除步骤"""
     server = get_server()
@@ -565,7 +698,7 @@ async def delete_step(
 async def execute_simple_job(
     job_id: str,
     data: ExecuteJobRequest = None,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.execute'))
 ):
     """执行简单作业 - 只记录到作业执行历史，不创建单独的task"""
     server = get_server()
@@ -715,7 +848,7 @@ async def get_simple_job_history(
     job_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取作业执行历史"""
     server = get_server()

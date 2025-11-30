@@ -409,10 +409,13 @@ class ProjectManager:
 
             cursor.execute('''
                 SELECT p.id, p.project_code, p.project_name, p.description, p.status,
-                       pm.role, pm.joined_at
+                       pm.role, pm.joined_at,
+                       COUNT(DISTINCT pm2.user_id) as member_count
                 FROM projects p
                 JOIN project_members pm ON p.id = pm.project_id
+                LEFT JOIN project_members pm2 ON p.id = pm2.project_id AND pm2.status = 'active'
                 WHERE pm.user_id = %s AND pm.status = 'active' AND p.status = 'active'
+                GROUP BY p.id, pm.role, pm.joined_at
                 ORDER BY pm.joined_at DESC
             ''', (user_id,))
 
@@ -428,7 +431,8 @@ class ProjectManager:
                     'description': project['description'],
                     'status': project['status'],
                     'role': project['role'],
-                    'joined_at': project['joined_at'].isoformat() if project['joined_at'] else None
+                    'joined_at': project['joined_at'].isoformat() if project['joined_at'] else None,
+                    'member_count': project['member_count']
                 })
 
             return result
@@ -501,3 +505,228 @@ class ProjectManager:
         except Exception as e:
             print(f"检查项目权限失败: {e}")
             return False
+    
+    # ==================== 功能权限管理 ====================
+    
+    def grant_permission(self, project_id: int, user_id: int,
+                        permission_key: str, granted_by: int) -> bool:
+        """授予用户功能权限"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO project_member_permissions
+                (project_id, user_id, permission_key, is_allowed, granted_by)
+                VALUES (%s, %s, %s, TRUE, %s)
+                ON DUPLICATE KEY UPDATE
+                is_allowed = TRUE,
+                granted_by = %s,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (project_id, user_id, permission_key, granted_by, granted_by))
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"授予功能权限失败: {e}")
+            return False
+    
+    def revoke_permission(self, project_id: int, user_id: int,
+                         permission_key: str) -> bool:
+        """撤销用户功能权限"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE project_member_permissions
+                SET is_allowed = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE project_id = %s AND user_id = %s AND permission_key = %s
+            ''', (project_id, user_id, permission_key))
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"撤销功能权限失败: {e}")
+            return False
+    
+    def check_permission(self, project_id: int, user_id: int,
+                        permission_key: str, user_role: str = None) -> bool:
+        """检查用户是否拥有某个功能权限"""
+        try:
+            # 系统admin拥有所有权限
+            if user_role in ['admin', 'super_admin']:
+                return True
+            
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            # 检查用户是否是项目成员
+            cursor.execute('''
+                SELECT role FROM project_members
+                WHERE project_id = %s AND user_id = %s AND status = 'active'
+            ''', (project_id, user_id))
+            
+            member = cursor.fetchone()
+            if not member:
+                conn.close()
+                return False
+            
+            # 项目admin拥有所有权限
+            if member['role'] == 'admin':
+                conn.close()
+                return True
+            
+            # 检查具体的功能权限
+            cursor.execute('''
+                SELECT is_allowed FROM project_member_permissions
+                WHERE project_id = %s AND user_id = %s AND permission_key = %s
+            ''', (project_id, user_id, permission_key))
+            
+            permission = cursor.fetchone()
+            conn.close()
+            
+            # 如果有明确的权限设置,使用该设置
+            if permission:
+                return permission['is_allowed']
+            
+            # 如果没有明确设置,使用默认权限
+            return self._get_default_permission(member['role'], permission_key)
+            
+        except Exception as e:
+            print(f"检查功能权限失败: {e}")
+            return False
+    
+    def _get_default_permission(self, role: str, permission_key: str) -> bool:
+        """获取角色的默认权限"""
+        # readwrite角色的默认权限
+        readwrite_permissions = [
+            'agent.view', 'agent.execute',
+            'job.view', 'job.create', 'job.execute',
+            'execution.view'
+        ]
+        
+        # readonly角色的默认权限
+        readonly_permissions = [
+            'agent.view', 'job.view', 'execution.view'
+        ]
+        
+        if role == 'readwrite':
+            return permission_key in readwrite_permissions
+        elif role == 'readonly':
+            return permission_key in readonly_permissions
+        
+        return False
+    
+    def get_user_permissions(self, project_id: int, user_id: int) -> List[str]:
+        """获取用户在项目中的所有权限"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            # 检查用户角色
+            cursor.execute('''
+                SELECT u.role, pm.role as project_role
+                FROM users u
+                LEFT JOIN project_members pm ON u.id = pm.user_id
+                WHERE u.id = %s AND (pm.project_id = %s OR u.role IN ('admin', 'super_admin'))
+            ''', (user_id, project_id))
+            
+            user_info = cursor.fetchone()
+            if not user_info:
+                conn.close()
+                return []
+            
+            # 系统admin或项目admin拥有所有权限
+            if user_info['role'] in ['admin', 'super_admin'] or \
+               user_info.get('project_role') == 'admin':
+                conn.close()
+                return ['*']  # 表示所有权限
+            
+            # 获取明确授予的权限
+            cursor.execute('''
+                SELECT permission_key FROM project_member_permissions
+                WHERE project_id = %s AND user_id = %s AND is_allowed = TRUE
+            ''', (project_id, user_id))
+            
+            explicit_permissions = [row['permission_key'] for row in cursor.fetchall()]
+            conn.close()
+            
+            # 合并默认权限
+            if user_info.get('project_role'):
+                default_perms = self._get_all_default_permissions(user_info['project_role'])
+                all_permissions = list(set(explicit_permissions + default_perms))
+                return all_permissions
+            
+            return explicit_permissions
+            
+        except Exception as e:
+            print(f"获取用户权限列表失败: {e}")
+            return []
+    
+    def _get_all_default_permissions(self, role: str) -> List[str]:
+        """获取角色的所有默认权限"""
+        readwrite_permissions = [
+            'agent.view', 'agent.execute',
+            'job.view', 'job.create', 'job.execute',
+            'execution.view'
+        ]
+        
+        readonly_permissions = [
+            'agent.view', 'job.view', 'execution.view'
+        ]
+        
+        if role == 'readwrite':
+            return readwrite_permissions
+        elif role == 'readonly':
+            return readonly_permissions
+        
+        return []
+    
+    def set_user_permissions(self, project_id: int, user_id: int,
+                            permissions: List[str], granted_by: int) -> bool:
+        """批量设置用户权限"""
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            # 先删除该用户在该项目的所有权限设置
+            cursor.execute('''
+                DELETE FROM project_member_permissions
+                WHERE project_id = %s AND user_id = %s
+            ''', (project_id, user_id))
+            
+            # 批量插入新权限
+            if permissions:
+                values = [(project_id, user_id, perm, granted_by) for perm in permissions]
+                cursor.executemany('''
+                    INSERT INTO project_member_permissions
+                    (project_id, user_id, permission_key, is_allowed, granted_by)
+                    VALUES (%s, %s, %s, TRUE, %s)
+                ''', values)
+            
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"批量设置权限失败: {e}")
+            return False
+    
+    def get_all_permission_keys(self) -> List[str]:
+        """获取所有可用的功能权限标识"""
+        return [
+            'agent.view',
+            'agent.batch_add',
+            'agent.execute',
+            'agent.terminal',
+            'job.view',
+            'job.create',
+            'job.edit',
+            'job.delete',
+            'job.execute',
+            'execution.view',
+            'execution.stop',
+            'project.member_manage'
+        ]

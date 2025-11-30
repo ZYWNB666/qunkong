@@ -1,20 +1,24 @@
 import React, { useState, useEffect } from 'react'
-import { 
-  Card, Table, Button, Space, message, Modal, Form, Input, 
+import {
+  Card, Table, Button, Space, message, Modal, Form, Input,
   Select, Divider, Tag, Collapse, InputNumber, Popconfirm, Tabs, List
 } from 'antd'
-import { 
-  PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined, 
+import {
+  PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined,
   ReloadOutlined, MinusCircleOutlined, DesktopOutlined, CodeOutlined,
-  SettingOutlined
+  SettingOutlined, CopyOutlined, HistoryOutlined
 } from '@ant-design/icons'
 import { simpleJobsApi, agentApi } from '../utils/api'
+import { useNavigate } from 'react-router-dom'
+import { usePermissions, PermissionGate } from '../hooks/usePermissions'
 
 const { TextArea } = Input
 const { Panel } = Collapse
 const { TabPane } = Tabs
 
 const SimpleJobs = () => {
+  const navigate = useNavigate()
+  const { hasPermission } = usePermissions()
   const [loading, setLoading] = useState(false)
   const [jobs, setJobs] = useState([])
   const [modalVisible, setModalVisible] = useState(false)
@@ -23,6 +27,9 @@ const SimpleJobs = () => {
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState('basic')
   const [formModified, setFormModified] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [executingJobId, setExecutingJobId] = useState(null)
+  const [cloningJobId, setCloningJobId] = useState(null)
 
   useEffect(() => {
     loadJobs()
@@ -32,7 +39,7 @@ const SimpleJobs = () => {
   const loadJobs = async () => {
     try {
       setLoading(true)
-      const response = await simpleJobsApi.getJobs({ project_id: 1 })
+      const response = await simpleJobsApi.getJobs()
       setJobs(response.jobs || [])
     } catch (error) {
       message.error('加载作业列表失败')
@@ -43,7 +50,8 @@ const SimpleJobs = () => {
 
   const loadAgents = async () => {
     try {
-      const response = await agentApi.getAgents({ project_id: 1 })
+      const response = await agentApi.getAgents()
+      console.log('作业管理-加载的agents数据:', response.agents)
       setAgents(response.agents || [])
     } catch (error) {
       console.error('加载主机列表失败:', error)
@@ -124,35 +132,38 @@ const SimpleJobs = () => {
 
   const handleSubmit = async () => {
     try {
+      setSubmitting(true)
       const values = await form.validateFields()
+      
+      console.log('提交的表单值:', values)
       
       // 过滤有效的主机组
       const validHostGroups = values.host_groups?.filter(hg => hg.group_name && hg.host_ids?.length > 0) || []
+      
+      // 确保获取所有步骤，包括新增的
+      const allSteps = values.steps?.filter(step => step && step.step_name && step.script_content).map((step, index) => ({
+        step_name: step.step_name,
+        script_content: step.script_content,
+        timeout: step.timeout || 300,
+        step_order: index + 1,
+        host_group_index: step.host_group_index != null ? step.host_group_index : null
+      })) || []
+      
+      console.log('处理后的步骤:', allSteps)
       
       const payload = {
         name: values.name,
         description: values.description || '',
         host_groups: validHostGroups,
         variables: values.variables?.filter(v => v.var_name) || [],
-        steps: values.steps?.map((step, index) => ({
-          step_name: step.step_name,
-          script_content: step.script_content,
-          timeout: step.timeout || 300,
-          step_order: index + 1,
-          // 使用索引关联主机组，后端会根据索引找到对应的主机组
-          host_group_index: step.host_group_index != null ? step.host_group_index : null
-        })) || []
+        steps: allSteps
       }
       
+      console.log('发送的payload:', payload)
+      
       if (editingJob) {
-        // 更新作业 - 需要分步骤更新
-        await simpleJobsApi.updateJob(editingJob.id, {
-          name: payload.name,
-          description: payload.description
-        })
-        
-        // 删除旧的主机组、变量、步骤，创建新的
-        // 这里简化处理，实际应该做增量更新
+        // 使用update API直接更新
+        await simpleJobsApi.updateJob(editingJob.id, payload)
         message.success('作业更新成功')
       } else {
         await simpleJobsApi.createJob(payload)
@@ -168,17 +179,50 @@ const SimpleJobs = () => {
         message.error('请填写完整信息')
       } else {
         console.error('作业提交错误:', error)
-        message.error(error.response?.data?.detail || '操作失败')
+        const errorDetail = error.response?.data?.detail
+        let errorMessage = '操作失败'
+        
+        if (typeof errorDetail === 'string') {
+          errorMessage = errorDetail
+        } else if (Array.isArray(errorDetail)) {
+          errorMessage = errorDetail.map(e => e.msg || JSON.stringify(e)).join('; ')
+        } else if (errorDetail) {
+          errorMessage = JSON.stringify(errorDetail)
+        }
+        
+        message.error(errorMessage)
       }
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const handleExecute = async (jobId) => {
+  const handleExecute = async (jobId, jobName) => {
     try {
+      setExecutingJobId(jobId)
       const response = await simpleJobsApi.executeJob(jobId)
-      message.success(`作业已开始执行，共 ${response.total_steps} 个步骤`)
+      
+      message.success(`作业"${jobName}"已开始执行`)
+      
+      // 直接跳转到详情页面，带上类型参数
+      navigate(`/execution-detail/${response.execution_id}?type=job`)
     } catch (error) {
       message.error(error.response?.data?.detail || '执行失败')
+    } finally {
+      setExecutingJobId(null)
+    }
+  }
+
+  const handleClone = async (jobId, jobName) => {
+    try {
+      setCloningJobId(jobId)
+      const response = await simpleJobsApi.cloneJob(jobId)
+      message.success(`作业已克隆：${response.new_name}`)
+      loadJobs()
+    } catch (error) {
+      message.error(error.response?.data?.detail || '克隆失败')
+    } finally {
+      setCloningJobId(null)
     }
   }
 
@@ -231,33 +275,53 @@ const SimpleJobs = () => {
       key: 'action',
       width: 200,
       render: (_, record) => (
-        <Space size="small">
-          <Button 
-            type="primary" 
-            size="small" 
-            icon={<PlayCircleOutlined />}
-            onClick={() => handleExecute(record.id)}
-            disabled={!record.step_count}
-          >
-            执行
-          </Button>
-          <Button 
-            size="small" 
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定要删除这个作业吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              删除
+        <Space size="small" wrap>
+          <PermissionGate permission="job.execute">
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={() => handleExecute(record.id, record.name)}
+              disabled={!record.step_count}
+              loading={executingJobId === record.id}
+            >
+              执行
             </Button>
-          </Popconfirm>
+          </PermissionGate>
+          
+          <PermissionGate permission="job.edit">
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(record)}
+            >
+              编辑
+            </Button>
+          </PermissionGate>
+          
+          <PermissionGate permission="job.create">
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={() => handleClone(record.id, record.name)}
+              loading={cloningJobId === record.id}
+            >
+              克隆
+            </Button>
+          </PermissionGate>
+          
+          <PermissionGate permission="job.delete">
+            <Popconfirm
+              title="确定要删除这个作业吗？"
+              onConfirm={() => handleDelete(record.id)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          </PermissionGate>
         </Space>
       )
     }
@@ -269,10 +333,12 @@ const SimpleJobs = () => {
         title="作业管理"
         extra={
           <Space>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-              创建作业
-            </Button>
-            <Button icon={<ReloadOutlined />} onClick={loadJobs}>
+            <PermissionGate permission="job.create">
+              <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+                创建作业
+              </Button>
+            </PermissionGate>
+            <Button icon={<ReloadOutlined />} onClick={loadJobs} loading={loading}>
               刷新
             </Button>
           </Space>
@@ -292,8 +358,9 @@ const SimpleJobs = () => {
         open={modalVisible}
         onCancel={handleModalClose}
         onOk={handleSubmit}
+        confirmLoading={submitting}
         width={900}
-        destroyOnClose
+        destroyOnHidden
         maskClosable={false}
       >
         <Form 
@@ -358,22 +425,34 @@ const SimpleJobs = () => {
                             optionFilterProp="children"
                             tagRender={(props) => {
                               const agent = agents.find(a => a.id === props.value)
+                              const isOnline = agent?.status === 'online' || agent?.status === 'connected'
                               return (
-                                <Tag 
-                                  closable={props.closable} 
+                                <Tag
+                                  closable={props.closable}
                                   onClose={props.onClose}
+                                  color={isOnline ? 'success' : 'default'}
                                   style={{ marginRight: 3 }}
                                 >
-                                  {agent ? `${agent.hostname} (${agent.ip_address || agent.ip})` : props.value}
+                                  {agent ? `${isOnline ? '🟢' : '⚫'} ${agent.hostname} (${agent.ip_address || agent.ip})` : props.value}
                                 </Tag>
                               )
                             }}
                           >
-                            {agents.map(agent => (
-                              <Select.Option key={agent.id} value={agent.id}>
-                                {agent.hostname} ({agent.ip_address || agent.ip || 'N/A'})
-                              </Select.Option>
-                            ))}
+                            {agents.map(agent => {
+                              const isOnline = agent.status === 'online' || agent.status === 'connected'
+                              console.log(`Agent ${agent.hostname} status:`, agent.status, 'isOnline:', isOnline)
+                              return (
+                                <Select.Option key={agent.id} value={agent.id}>
+                                  <Space>
+                                    <Tag color={isOnline ? 'success' : 'error'} style={{ margin: 0 }}>
+                                      {isOnline ? '在线' : '离线'}
+                                    </Tag>
+                                    <span>{agent.hostname}</span>
+                                    <span style={{ color: '#999' }}>({agent.ip_address || agent.ip || 'N/A'})</span>
+                                  </Space>
+                                </Select.Option>
+                              )
+                            })}
                           </Select>
                         </Form.Item>
                       </Card>

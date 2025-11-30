@@ -189,7 +189,13 @@ const Terminal = () => {
           dataSource={agents}
           renderItem={agent => {
             const isActive = tabs.find(tab => tab.key === agent.id)
-            const isOnline = agent.status === 'ONLINE'
+            // 支持多种在线状态的表示方式
+            const isOnline = agent.status && (
+              agent.status.toUpperCase() === 'ONLINE' ||
+              agent.status.toLowerCase() === 'online' ||
+              agent.is_online === true ||
+              agent.online === true
+            )
             return (
               <List.Item
                 style={{
@@ -404,6 +410,7 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     if (!containerRef.current || initializedRef.current) return
     
     initializedRef.current = true
+    let isCleanedUp = false
 
     const term = new XTerm({
       cursorBlink: true,
@@ -428,10 +435,9 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     setTimeout(() => fitAddon.fit(), 100)
 
     // 动态获取 WebSocket 地址：使用当前页面的 hostname，通过 nginx 代理
+    // 使用 window.location.host 自动包含正确的端口号（如果有的话）
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsHost = window.location.hostname
-    const wsPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
-    const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/ws/terminal/${agentId}`
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/terminal/${agentId}`
     const ws = new WebSocket(wsUrl)
     ws.binaryType = 'arraybuffer'
 
@@ -702,6 +708,8 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     }
 
     ws.onerror = (error) => {
+      // 忽略在清理期间的错误
+      if (isCleanedUp) return
       console.error('WebSocket error:', error)
       if (terminalsRef.current[agentId]) {
         terminalsRef.current[agentId].connected = false
@@ -711,6 +719,8 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     }
 
     ws.onclose = () => {
+      // 忽略在清理期间的关闭
+      if (isCleanedUp) return
       if (terminalsRef.current[agentId]) {
         terminalsRef.current[agentId].connected = false
       }
@@ -745,6 +755,7 @@ const TerminalPane = ({ agentId, terminalsRef }) => {
     window.addEventListener('resize', handleResize)
 
     return () => {
+      isCleanedUp = true
       initializedRef.current = false
       window.removeEventListener('resize', handleResize)
       if (ws) ws.close()

@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000
+  timeout: 30000  // 增加到30秒，避免网络延迟导致的超时
 })
 
 // 请求拦截器
@@ -15,21 +15,36 @@ api.interceptors.request.use(
     }
     
     // 自动添加project_id到请求（排除某些不需要项目的接口）
-    const noProjectUrls = ['/auth/login', '/auth/register', '/auth/logout', '/auth/verify', '/projects/my-projects']
+    const noProjectUrls = [
+      '/auth/login',
+      '/auth/register',
+      '/auth/logout',
+      '/auth/verify',
+      '/projects/my-projects',
+      '/projects?',  // 项目列表接口
+      '/users?',     // 用户列表接口
+      '/users/',     // 用户详情接口
+    ]
     const needsProject = !noProjectUrls.some(url => config.url.includes(url))
     
     if (needsProject) {
       const currentProject = JSON.parse(localStorage.getItem('qunkong_current_project') || '{}')
       if (currentProject.id) {
-        // GET请求添加到params
-        if (config.method === 'get' && !config.params?.project_id) {
+        // 所有请求都添加到params（query参数）
+        if (!config.params?.project_id) {
           config.params = config.params || {}
           config.params.project_id = currentProject.id
         }
-        // POST/PUT/PATCH请求添加到data
-        else if (['post', 'put', 'patch'].includes(config.method)) {
-          // 确保 data 存在且是对象
-          if (typeof config.data === 'object' && config.data !== null && !Array.isArray(config.data)) {
+        
+        // POST/PUT/PATCH请求也添加到data（兼容部分接口）
+        if (['post', 'put', 'patch'].includes(config.method)) {
+          // 检查是否是FormData对象
+          if (config.data instanceof FormData) {
+            // FormData已经在组件中手动添加了project_id，不需要在这里处理
+            // 什么都不做，保持FormData不变
+          }
+          // 确保 data 存在且是普通对象
+          else if (typeof config.data === 'object' && config.data !== null && !Array.isArray(config.data)) {
             if (!config.data.project_id) {
               config.data.project_id = currentProject.id
             }
@@ -119,10 +134,24 @@ export const simpleJobsApi = {
   getJob: (jobId) => api.get(`/simple-jobs/${jobId}`),
   createJob: (data) => api.post('/simple-jobs', data),
   updateJob: (jobId, data) => api.put(`/simple-jobs/${jobId}`, data),
+  cloneJob: (jobId) => api.post(`/simple-jobs/${jobId}/clone`),
   deleteJob: (jobId) => api.delete(`/simple-jobs/${jobId}`),
+  // 主机组操作
+  getHostGroups: (jobId) => api.get(`/simple-jobs/${jobId}/host-groups`),
+  addHostGroup: (jobId, data) => api.post(`/simple-jobs/${jobId}/host-groups`, data),
+  updateHostGroup: (jobId, groupId, data) => api.put(`/simple-jobs/${jobId}/host-groups/${groupId}`, data),
+  deleteHostGroup: (jobId, groupId) => api.delete(`/simple-jobs/${jobId}/host-groups/${groupId}`),
+  // 变量操作
+  getVariables: (jobId) => api.get(`/simple-jobs/${jobId}/variables`),
+  addVariable: (jobId, data) => api.post(`/simple-jobs/${jobId}/variables`, data),
+  updateVariable: (jobId, varId, data) => api.put(`/simple-jobs/${jobId}/variables/${varId}`, data),
+  deleteVariable: (jobId, varId) => api.delete(`/simple-jobs/${jobId}/variables/${varId}`),
+  // 步骤操作
+  getSteps: (jobId) => api.get(`/simple-jobs/${jobId}/steps`),
   addStep: (jobId, data) => api.post(`/simple-jobs/${jobId}/steps`, data),
   updateStep: (jobId, stepId, data) => api.put(`/simple-jobs/${jobId}/steps/${stepId}`, data),
   deleteStep: (jobId, stepId) => api.delete(`/simple-jobs/${jobId}/steps/${stepId}`),
+  // 执行相关
   executeJob: (jobId) => api.post(`/simple-jobs/${jobId}/execute`),
   getExecution: (executionId) => api.get(`/simple-jobs/executions/${executionId}`),
   getExecutions: (params) => api.get('/simple-jobs/executions', { params })
@@ -140,19 +169,6 @@ export const usersApi = {
   getUserStats: () => api.get('/users/stats')
 }
 
-export const tenantsApi = {
-  getTenants: (params) => api.get('/tenants', { params }),
-  getTenant: (tenantId) => api.get(`/tenants/${tenantId}`),
-  getMyTenants: () => api.get('/tenants/my-tenants'),
-  createTenant: (data) => api.post('/tenants', data),
-  updateTenant: (tenantId, data) => api.put(`/tenants/${tenantId}`, data),
-  deleteTenant: (tenantId) => api.delete(`/tenants/${tenantId}`),
-  getTenantMembers: (tenantId) => api.get(`/tenants/${tenantId}/members`),
-  addTenantMember: (tenantId, data) => api.post(`/tenants/${tenantId}/members`, data),
-  updateMemberRole: (tenantId, userId, data) => api.put(`/tenants/${tenantId}/members/${userId}/role`, data),
-  removeTenantMember: (tenantId, userId) => api.delete(`/tenants/${tenantId}/members/${userId}`)
-}
-
 export const projectsApi = {
   getProjects: (params) => api.get('/projects', { params }),
   getProject: (projectId) => api.get(`/projects/${projectId}`),
@@ -163,7 +179,20 @@ export const projectsApi = {
   addProjectMember: (projectId, data) => api.post(`/projects/${projectId}/members`, data),
   removeProjectMember: (projectId, userId) => api.delete(`/projects/${projectId}/members/${userId}`),
   updateMemberRole: (projectId, userId, data) => api.put(`/projects/${projectId}/members/${userId}/role`, data),
-  getMyProjects: () => api.get('/projects/my-projects')
+  getMyProjects: () => api.get('/projects/my-projects'),
+  // 权限管理
+  getAllPermissions: (projectId) => api.get(`/projects/${projectId}/permissions`),
+  getUserPermissions: (projectId, userId) => api.get(`/projects/${projectId}/members/${userId}/permissions`),
+  setUserPermissions: (projectId, userId, permissions) => api.post(`/projects/${projectId}/members/${userId}/permissions`, { permissions })
+}
+
+// 批量安装Agent
+export const batchInstallApi = {
+  batchInstall: (formData) => api.post('/agents/batch-install', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  getInstallHistory: () => api.get('/agents/install-history'),
+  getBatchDetails: (batchId) => api.get(`/agents/install-history/${batchId}`)
 }
 
 export default api

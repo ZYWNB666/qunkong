@@ -11,6 +11,11 @@ export default defineConfig({
       '/api': {
         target: `http://${config.api.host}:${config.api.port}`,
         changeOrigin: true
+      },
+      '/ws': {
+        target: `ws://${config.websocket.host}:${config.websocket.port}`,
+        changeOrigin: true,
+        ws: true
       }
     }
   },

@@ -545,11 +545,24 @@ class AuthManager:
             return False
 
     def delete_user(self, user_id: int) -> bool:
-        """删除用户（软删除，将is_active设置为False）"""
+        """删除用户（物理删除）"""
         try:
-            return self.update_user(user_id, is_active=False)
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            
+            # 先删除用户的项目成员关系
+            cursor.execute('DELETE FROM project_members WHERE user_id = %s', (user_id,))
+            
+            # 再删除用户
+            cursor.execute('DELETE FROM users WHERE id = %s', (user_id,))
+            conn.commit()
+            cursor.close()
+            
+            return cursor.rowcount > 0
         except Exception as e:
             print(f"删除用户失败: {e}")
+            if conn:
+                conn.rollback()
             return False
 
     def count_users(self, role: str = None, is_active: bool = None) -> int:

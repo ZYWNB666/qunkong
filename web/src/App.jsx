@@ -18,12 +18,13 @@ import Login from './pages/Login'
 import ProjectSelector from './pages/ProjectSelector'
 import ScriptExecution from './pages/ScriptExecution'
 import ExecutionHistory from './pages/ExecutionHistory'
+import JobExecutionDetail from './pages/JobExecutionDetail'
 import AgentManagement from './pages/AgentManagement'
+import BatchAddAgent from './pages/BatchAddAgent'
 import SimpleJobs from './pages/SimpleJobs'
 import Terminal from './pages/Terminal'
 import UserManagement from './pages/UserManagement'
 import ProjectManagement from './pages/ProjectManagement'
-import TenantManagement from './pages/TenantManagement'
 import UserProfile from './pages/UserProfile'
 import './App.css'
 
@@ -106,6 +107,7 @@ const MainLayout = () => {
   }
 
   const isAdmin = currentUser && ['admin', 'super_admin'].includes(currentUser.role)
+  const isProjectAdmin = currentProject && currentProject.role === 'admin'
 
   const userMenuItems = [
     {
@@ -169,7 +171,12 @@ const MainLayout = () => {
         {
           key: '/agent-management',
           icon: <DesktopOutlined />,
-          label: 'Agent'
+          label: 'Agent管理'
+        },
+        {
+          key: '/batch-add-agent',
+          icon: <DesktopOutlined />,
+          label: '批量添加主机'
         }
       ]
     },
@@ -184,15 +191,15 @@ const MainLayout = () => {
           label: '用户管理'
         },
         {
-          key: '/tenant-management',
+          key: '/project-management',
           icon: <BankOutlined />,
-          label: '租户管理'
+          label: '项目管理'
         }
       ]
     }] : []),
-    {
-      key: 'projects',
-      label: '我的项目',
+    ...(!isAdmin && isProjectAdmin ? [{
+      key: 'project-admin',
+      label: '项目管理',
       type: 'group',
       children: [
         {
@@ -201,7 +208,7 @@ const MainLayout = () => {
           label: '项目管理'
         }
       ]
-    }
+    }] : [])
   ]
 
   return (
@@ -256,11 +263,12 @@ const MainLayout = () => {
           <Routes>
             <Route path="/script-execution" element={<ProtectedRoute><ScriptExecution /></ProtectedRoute>} />
             <Route path="/execution-history" element={<ProtectedRoute><ExecutionHistory /></ProtectedRoute>} />
+            <Route path="/execution-detail/:executionId" element={<ProtectedRoute><JobExecutionDetail /></ProtectedRoute>} />
             <Route path="/agent-management" element={<ProtectedRoute><AgentManagement /></ProtectedRoute>} />
+            <Route path="/batch-add-agent" element={<ProtectedRoute><BatchAddAgent /></ProtectedRoute>} />
             <Route path="/jobs" element={<ProtectedRoute><SimpleJobs /></ProtectedRoute>} />
             <Route path="/user-management" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
             <Route path="/project-management" element={<ProtectedRoute><ProjectManagement /></ProtectedRoute>} />
-            <Route path="/tenant-management" element={<ProtectedRoute><TenantManagement /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute requiresProject={false}><UserProfile /></ProtectedRoute>} />
           </Routes>
         </Content>

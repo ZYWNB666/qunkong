@@ -64,10 +64,12 @@ class DatabaseManager:
                     external_ip VARCHAR(45) DEFAULT '',
                     os_type VARCHAR(50) DEFAULT 'unknown',
                     status VARCHAR(20) DEFAULT 'OFFLINE',
+                    tenant_id INT,
                     project_id INT,
                     last_heartbeat DATETIME,
                     register_time DATETIME,
                     websocket_info JSON,
+                    tags JSON,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX idx_hostname (hostname),
@@ -75,6 +77,7 @@ class DatabaseManager:
                     INDEX idx_external_ip (external_ip),
                     INDEX idx_status (status),
                     INDEX idx_last_heartbeat (last_heartbeat),
+                    INDEX idx_tenant_id (tenant_id),
                     INDEX idx_project_id (project_id),
                     INDEX idx_os_type (os_type)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -86,6 +89,39 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE agents ADD COLUMN os_type VARCHAR(50) DEFAULT 'unknown' AFTER external_ip")
                 cursor.execute("ALTER TABLE agents ADD INDEX idx_os_type (os_type)")
                 print("数据库迁移：添加 os_type 字段到 agents 表")
+            
+            # 检查并添加 tags 字段（如果表已存在但没有该字段）
+            cursor.execute("SHOW COLUMNS FROM agents LIKE 'tags'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE agents ADD COLUMN tags JSON AFTER websocket_info")
+                print("数据库迁移：添加 tags 字段到 agents 表")
+            
+            # 检查并添加 tenant_id 字段
+            cursor.execute("SHOW COLUMNS FROM agents LIKE 'tenant_id'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE agents ADD COLUMN tenant_id INT AFTER status")
+                cursor.execute("ALTER TABLE agents ADD INDEX idx_tenant_id (tenant_id)")
+                print("数据库迁移：添加 tenant_id 字段到 agents 表")
+            
+            # 创建项目-Agent关联表（用于权限管理）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS project_agents (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    project_id INT NOT NULL,
+                    agent_id VARCHAR(64) NOT NULL,
+                    can_execute BOOLEAN DEFAULT TRUE,
+                    can_terminal BOOLEAN DEFAULT TRUE,
+                    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    assigned_by INT,
+                    status VARCHAR(20) DEFAULT 'active',
+                    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                    FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+                    UNIQUE KEY unique_project_agent (project_id, agent_id),
+                    INDEX idx_project_id (project_id),
+                    INDEX idx_agent_id (agent_id),
+                    INDEX idx_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ''')
             
             
             # 创建执行历史表
@@ -459,16 +495,20 @@ class DatabaseManager:
             
             cursor.execute('''
                 INSERT INTO agents
-                (id, hostname, ip_address, external_ip, os_type, status, last_heartbeat, register_time, websocket_info)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, hostname, ip_address, external_ip, os_type, status, tenant_id, project_id,
+                 last_heartbeat, register_time, websocket_info, tags)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 hostname = VALUES(hostname),
                 ip_address = VALUES(ip_address),
                 external_ip = COALESCE(VALUES(external_ip), external_ip),
                 os_type = VALUES(os_type),
                 status = VALUES(status),
+                tenant_id = COALESCE(VALUES(tenant_id), tenant_id),
+                project_id = COALESCE(VALUES(project_id), project_id),
                 last_heartbeat = VALUES(last_heartbeat),
-                websocket_info = VALUES(websocket_info)
+                websocket_info = VALUES(websocket_info),
+                tags = COALESCE(VALUES(tags), tags)
             ''', (
                 agent_data.get('id'),
                 agent_data.get('hostname', ''),
@@ -476,9 +516,12 @@ class DatabaseManager:
                 agent_data.get('external_ip', ''),
                 agent_data.get('os_type', 'unknown'),
                 agent_data.get('status', 'OFFLINE'),
+                agent_data.get('tenant_id'),
+                agent_data.get('project_id'),
                 agent_data.get('last_heartbeat', ''),
                 agent_data.get('register_time', ''),
-                json.dumps(agent_data.get('websocket_info', {}))
+                json.dumps(agent_data.get('websocket_info', {})),
+                json.dumps(agent_data.get('tags', []))
             ))
             
             conn.close()
@@ -487,18 +530,32 @@ class DatabaseManager:
             print(f"保存Agent信息失败: {e}")
             return False
     
-    def get_all_agents(self) -> List[Dict[str, Any]]:
-        """获取所有Agent信息"""
+    def get_all_agents(self, tenant_id: int = None, project_id: int = None) -> List[Dict[str, Any]]:
+        """获取Agent信息（支持租户和项目过滤，严格隔离）"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT id, hostname, ip_address, external_ip, os_type, status, last_heartbeat, register_time, websocket_info
+            sql = '''
+                SELECT id, hostname, ip_address, external_ip, os_type, status,
+                       tenant_id, project_id, last_heartbeat, register_time, websocket_info, tags
                 FROM agents
-                ORDER BY register_time DESC
-            ''')
+                WHERE 1=1
+            '''
+            params = []
             
+            if tenant_id is not None:
+                sql += ' AND tenant_id = %s'
+                params.append(tenant_id)
+            
+            if project_id is not None:
+                # 严格隔离：只显示明确分配给该项目的Agent
+                sql += ' AND project_id = %s'
+                params.append(project_id)
+            
+            sql += ' ORDER BY register_time DESC'
+            
+            cursor.execute(sql, tuple(params))
             rows = cursor.fetchall()
             conn.close()
             
@@ -506,6 +563,11 @@ class DatabaseManager:
             for row in rows:
                 # 处理JSON字段
                 websocket_info = row['websocket_info'] if isinstance(row['websocket_info'], dict) else json.loads(row['websocket_info']) if row['websocket_info'] else {}
+                tags = row.get('tags')
+                if tags:
+                    tags = tags if isinstance(tags, list) else json.loads(tags)
+                else:
+                    tags = []
                 
                 agents.append({
                     'id': row['id'],
@@ -514,15 +576,168 @@ class DatabaseManager:
                     'external_ip': row.get('external_ip', ''),
                     'os_type': row.get('os_type', 'unknown'),
                     'status': row['status'],
+                    'tenant_id': row.get('tenant_id'),
+                    'project_id': row.get('project_id'),
                     'last_heartbeat': row['last_heartbeat'].isoformat() if row['last_heartbeat'] else None,
                     'register_time': row['register_time'].isoformat() if row['register_time'] else None,
-                    'websocket_info': websocket_info
+                    'websocket_info': websocket_info,
+                    'tags': tags
                 })
             
             return agents
         except Exception as e:
             print(f"获取Agent列表失败: {e}")
             return []
+    
+    def assign_agent_to_project(self, project_id: int, agent_id: str,
+                                can_execute: bool = True, can_terminal: bool = True,
+                                assigned_by: int = None) -> bool:
+        """将Agent分配给项目"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO project_agents (project_id, agent_id, can_execute, can_terminal, assigned_by)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                can_execute = VALUES(can_execute),
+                can_terminal = VALUES(can_terminal),
+                status = 'active'
+            ''', (project_id, agent_id, can_execute, can_terminal, assigned_by))
+            
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"分配Agent到项目失败: {e}")
+            return False
+    
+    def remove_agent_from_project(self, project_id: int, agent_id: str) -> bool:
+        """从项目中移除Agent"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE project_agents
+                SET status = 'inactive'
+                WHERE project_id = %s AND agent_id = %s
+            ''', (project_id, agent_id))
+            
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"从项目移除Agent失败: {e}")
+            return False
+    
+    def get_project_agents(self, project_id: int) -> List[Dict[str, Any]]:
+        """获取项目的Agent列表"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT pa.id, pa.agent_id, pa.can_execute, pa.can_terminal, pa.assigned_at,
+                       a.hostname, a.ip_address, a.status, a.os_type, a.tags
+                FROM project_agents pa
+                JOIN agents a ON pa.agent_id = a.id
+                WHERE pa.project_id = %s AND pa.status = 'active'
+                ORDER BY pa.assigned_at DESC
+            ''', (project_id,))
+            
+            agents = cursor.fetchall()
+            conn.close()
+            
+            result = []
+            for agent in agents:
+                tags = agent.get('tags')
+                if tags:
+                    tags = tags if isinstance(tags, list) else json.loads(tags)
+                else:
+                    tags = []
+                
+                result.append({
+                    'id': agent['id'],
+                    'agent_id': agent['agent_id'],
+                    'hostname': agent['hostname'],
+                    'ip_address': agent['ip_address'],
+                    'status': agent['status'],
+                    'os_type': agent['os_type'],
+                    'can_execute': bool(agent['can_execute']),
+                    'can_terminal': bool(agent['can_terminal']),
+                    'assigned_at': agent['assigned_at'].isoformat() if agent['assigned_at'] else None,
+                    'tags': tags
+                })
+            
+            return result
+        except Exception as e:
+            print(f"获取项目Agent列表失败: {e}")
+            return []
+    
+    def check_agent_project_permission(self, agent_id: str, project_id: int, 
+                                      permission_type: str = 'execute') -> bool:
+        """检查Agent在项目中的权限"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT can_execute, can_terminal
+                FROM project_agents
+                WHERE project_id = %s AND agent_id = %s AND status = 'active'
+            ''', (project_id, agent_id))
+            
+            perm = cursor.fetchone()
+            conn.close()
+            
+            if not perm:
+                return False
+            
+            if permission_type == 'execute':
+                return bool(perm['can_execute'])
+            elif permission_type == 'terminal':
+                return bool(perm['can_terminal'])
+            
+            return False
+        except Exception as e:
+            print(f"检查Agent权限失败: {e}")
+            return False
+    
+    def update_agent_tenant(self, agent_id: str, tenant_id: int) -> bool:
+        """更新Agent的租户"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE agents
+                SET tenant_id = %s
+                WHERE id = %s
+            ''', (tenant_id, agent_id))
+            
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"更新Agent租户失败: {e}")
+            return False
+    
+    def update_agent_project(self, agent_id: str, project_id: int) -> bool:
+        """更新Agent的默认项目"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE agents
+                SET project_id = %s
+                WHERE id = %s
+            ''', (project_id, agent_id))
+            
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"更新Agent项目失败: {e}")
+            return False
     
     def get_current_time(self) -> str:
         """获取当前时间的ISO格式字符串"""

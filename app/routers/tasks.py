@@ -7,18 +7,19 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional
 from app.routers.deps import (
-    get_current_user, get_server, require_permission, ExecuteScriptRequest
+    get_current_user, get_server, ExecuteScriptRequest
 )
+from app.routers.rbac import require_permission
 
 router = APIRouter(prefix="/api", tags=["任务执行"])
 
 
 @router.get("/tasks")
 async def get_tasks(
-    project_id: Optional[int] = Query(None, description="项目ID"),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
 ):
     """获取执行历史"""
+    project_id = current_user.get('current_project_id')
     server = get_server()
     
     history = server.db.get_execution_history(project_id=project_id, limit=100)
@@ -62,9 +63,11 @@ async def get_tasks(
 @router.post("/tasks")
 async def create_task(
     data: ExecuteScriptRequest,
-    current_user: Dict[str, Any] = Depends(require_permission('script_execution'))
+    current_user: Dict[str, Any] = Depends(require_permission('script.execute'))
 ):
     """创建新任务"""
+    # 从用户上下文获取project_id
+    project_id = current_user.get('current_project_id')
     server = get_server()
     
     task_id = server.create_task(
@@ -73,14 +76,18 @@ async def create_task(
         script_name=data.script_name,
         script_params=data.script_params,
         timeout=data.timeout,
-        execution_user=data.execution_user
+        execution_user=data.execution_user,
+        project_id=project_id
     )
     
     return {'task_id': task_id, 'message': 'Task created successfully'}
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_details(task_id: str):
+async def get_task_details(
+    task_id: str,
+    current_user: Dict[str, Any] = Depends(require_permission('job.view'))
+):
     """获取任务详细信息"""
     server = get_server()
     
@@ -121,10 +128,13 @@ async def get_task_details(task_id: str):
 @router.post("/execute")
 async def execute_script(
     data: ExecuteScriptRequest,
-    current_user: Dict[str, Any] = Depends(require_permission('script_execution'))
+    current_user: Dict[str, Any] = Depends(require_permission('script.execute'))
 ):
     """执行脚本"""
     server = get_server()
+    
+    # 从用户上下文获取project_id
+    project_id = current_user.get('current_project_id')
     
     task_id = server.create_task(
         script=data.script,
@@ -133,7 +143,7 @@ async def execute_script(
         script_params=data.script_params,
         timeout=data.timeout,
         execution_user=data.execution_user,
-        project_id=data.project_id
+        project_id=project_id
     )
     
     def run_task():
@@ -152,7 +162,7 @@ async def execute_script(
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(
     task_id: str,
-    current_user: Dict[str, Any] = Depends(require_permission('script_execution'))
+    current_user: Dict[str, Any] = Depends(require_permission('script.execute'))
 ):
     """重试任务"""
     server = get_server()
@@ -197,7 +207,7 @@ async def retry_task(
 @router.post("/tasks/{task_id}/stop")
 async def stop_task(
     task_id: str,
-    current_user: Dict[str, Any] = Depends(require_permission('script_execution'))
+    current_user: Dict[str, Any] = Depends(require_permission('script.execute'))
 ):
     """停止任务"""
     server = get_server()

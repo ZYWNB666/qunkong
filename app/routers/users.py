@@ -2,11 +2,17 @@
 用户管理 API 路由
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
-from app.routers.deps import get_current_user, get_auth_manager
+from app.routers.deps import get_current_user, get_auth_manager, get_server
 
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
+
+
+class ProjectRoleAssignment(BaseModel):
+    """项目角色分配"""
+    project_id: int
+    role: str = "member"
 
 
 class CreateUserRequest(BaseModel):
@@ -15,6 +21,7 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str = Field(..., min_length=6)
     role: str = "user"
+    project_roles: Optional[List[ProjectRoleAssignment]] = Field(default=None, description="项目角色分配列表")
 
 
 class UpdateUserRequest(BaseModel):
@@ -22,6 +29,7 @@ class UpdateUserRequest(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    project_roles: Optional[List[ProjectRoleAssignment]] = Field(default=None, description="项目角色分配列表")
 
 
 def require_admin(current_user: Dict[str, Any] = Depends(get_current_user)):
@@ -38,6 +46,7 @@ async def get_users(
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    project_id: Optional[int] = Query(None, description="项目ID（前端自动添加，此接口忽略）"),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """获取用户列表"""
@@ -107,6 +116,31 @@ async def create_user(
         raise HTTPException(status_code=400, detail="用户名或邮箱已存在")
     
     user = auth_manager.get_user_by_username(data.username)
+    user_id = user['id']
+    
+    # 如果指定了项目角色，添加用户到项目
+    if data.project_roles:
+        server = get_server()
+        from app.models.project import ProjectManager
+        project_manager = ProjectManager(server.db)
+        
+        for project_role in data.project_roles:
+            try:
+                # 验证项目是否存在
+                project = project_manager.get_project_by_id(project_role.project_id)
+                if not project:
+                    print(f"项目 {project_role.project_id} 不存在，跳过")
+                    continue
+                
+                # 添加用户到项目
+                project_manager.add_project_member(
+                    project_id=project_role.project_id,
+                    user_id=user_id,
+                    role=project_role.role,
+                    invited_by=current_user['user_id']
+                )
+            except Exception as e:
+                print(f"添加用户到项目 {project_role.project_id} 失败: {e}")
     
     return {'message': '用户创建成功', 'user': user}
 
@@ -135,6 +169,36 @@ async def update_user(
     success = auth_manager.update_user(user_id, **update_data)
     if not success:
         raise HTTPException(status_code=500, detail="更新用户失败")
+    
+    # 如果指定了项目角色，更新用户的项目分配
+    if data.project_roles is not None:
+        server = get_server()
+        from app.models.project import ProjectManager
+        project_manager = ProjectManager(server.db)
+        
+        # 先移除用户的所有项目分配
+        conn = server.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM project_members WHERE user_id = %s", (user_id,))
+        conn.commit()
+        
+        # 添加新的项目分配
+        for project_role in data.project_roles:
+            try:
+                project = project_manager.get_project_by_id(project_role.project_id)
+                if not project:
+                    continue
+                
+                project_manager.add_project_member(
+                    project_id=project_role.project_id,
+                    user_id=user_id,
+                    role=project_role.role,
+                    invited_by=current_user['user_id']
+                )
+            except Exception as e:
+                print(f"添加用户到项目 {project_role.project_id} 失败: {e}")
+        
+        conn.close()
     
     updated_user = auth_manager.get_user_by_id(user_id)
     return {'message': '用户更新成功', 'user': updated_user}

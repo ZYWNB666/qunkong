@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Card, Table, Tag, Button, Space, message, Modal, Descriptions, Row, Col, Statistic } from 'antd'
 import { ReloadOutlined, DeleteOutlined, DesktopOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import { agentApi } from '../utils/api'
+import { usePermissions, PermissionGate } from '../hooks/usePermissions'
 
 const AgentManagement = () => {
   const [loading, setLoading] = useState(false)
@@ -9,6 +10,7 @@ const AgentManagement = () => {
   const [detailVisible, setDetailVisible] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const { hasPermission } = usePermissions()
 
   useEffect(() => {
     loadAgents()
@@ -17,6 +19,7 @@ const AgentManagement = () => {
   const loadAgents = async () => {
     try {
       setLoading(true)
+      // API拦截器会自动添加project_id参数
       const response = await agentApi.getAgents()
       setAgents(response.agents || [])
     } catch (error) {
@@ -39,10 +42,10 @@ const AgentManagement = () => {
   const handleCleanup = () => {
     Modal.confirm({
       title: '清理离线 Agent',
-      content: '确定要清理超过24小时离线的 Agent 吗？',
+      content: '确定要清理所有离线状态的 Agent 吗？此操作不可恢复！',
       onOk: async () => {
         try {
-          await agentApi.cleanupOfflineAgents(24)
+          await agentApi.cleanupOfflineAgents(0)
           message.success('清理完成')
           loadAgents()
         } catch (error) {
@@ -133,16 +136,46 @@ const AgentManagement = () => {
       key: 'status',
       width: 100,
       render: status => {
-        const colors = {
-          ONLINE: 'success',
-          OFFLINE: 'default'
-        }
-        const labels = {
-          ONLINE: '在线',
-          OFFLINE: '离线'
-        }
-        return <Tag color={colors[status]}>{labels[status] || status}</Tag>
+        const isOnline = status === 'online' || status === 'ONLINE' || status === 'connected'
+        return (
+          <Tag color={isOnline ? 'success' : 'error'}>
+            {isOnline ? '在线' : '离线'}
+          </Tag>
+        )
       }
+    },
+    {
+      title: '标签',
+      dataIndex: 'tags',
+      key: 'tags',
+      width: 150,
+      render: (tags) => (
+        <>
+          {tags && tags.length > 0 ? (
+            tags.map((tag, index) => (
+              <Tag color="blue" key={index} style={{ marginBottom: 4 }}>
+                {tag}
+              </Tag>
+            ))
+          ) : (
+            '-'
+          )}
+        </>
+      )
+    },
+    {
+      title: '租户ID',
+      dataIndex: 'tenant_id',
+      key: 'tenant_id',
+      width: 100,
+      render: (tenant_id) => tenant_id || '-'
+    },
+    {
+      title: '项目ID',
+      dataIndex: 'project_id',
+      key: 'project_id',
+      width: 100,
+      render: (project_id) => project_id || '-'
     },
     {
       title: '操作系统',
@@ -176,21 +209,27 @@ const AgentManagement = () => {
           >
             详情
           </Button>
-          <Button
-            type="link"
-            size="small"
-            onClick={() => handleRestart(record.id)}
-          >
-            重启
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<DesktopOutlined />}
-            onClick={() => window.open(`/terminal/${record.id}`, '_blank')}
-          >
-            终端
-          </Button>
+          
+          <PermissionGate permission="agent.restart">
+            <Button
+              type="link"
+              size="small"
+              onClick={() => handleRestart(record.id)}
+            >
+              重启
+            </Button>
+          </PermissionGate>
+          
+          <PermissionGate permission="terminal.access">
+            <Button
+              type="link"
+              size="small"
+              icon={<DesktopOutlined />}
+              onClick={() => window.open(`/terminal/${record.id}`, '_blank')}
+            >
+              终端
+            </Button>
+          </PermissionGate>
         </Space>
       )
     }
@@ -202,12 +241,14 @@ const AgentManagement = () => {
         title="Agent 管理"
         extra={
           <Space>
-            <Button
-              icon={<DeleteOutlined />}
-              onClick={handleCleanup}
-            >
-              清理离线
-            </Button>
+            <PermissionGate permission="agent.delete">
+              <Button
+                icon={<DeleteOutlined />}
+                onClick={handleCleanup}
+              >
+                清理离线
+              </Button>
+            </PermissionGate>
             <Button icon={<ReloadOutlined />} onClick={loadAgents}>
               刷新
             </Button>
@@ -248,8 +289,8 @@ const AgentManagement = () => {
                   {selectedAgent.system_info?.os || selectedAgent.os_type || 'Unknown'}
                 </Descriptions.Item>
                 <Descriptions.Item label="状态">
-                  <Tag color={selectedAgent.status === 'ONLINE' ? 'success' : 'default'}>
-                    {selectedAgent.status === 'ONLINE' ? '在线' : '离线'}
+                  <Tag color={selectedAgent.status === 'online' || selectedAgent.status === 'ONLINE' || selectedAgent.status === 'connected' ? 'success' : 'error'}>
+                    {selectedAgent.status === 'online' || selectedAgent.status === 'ONLINE' || selectedAgent.status === 'connected' ? '在线' : '离线'}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="注册时间">{selectedAgent.register_time || '-'}</Descriptions.Item>
