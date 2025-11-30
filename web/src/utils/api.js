@@ -1,5 +1,11 @@
 import axios from 'axios'
 
+// 用于存储清除权限缓存的函数引用（避免循环依赖）
+let clearPermissionCacheRef = null
+export const setPermissionCacheClearer = (fn) => {
+  clearPermissionCacheRef = fn
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000  // 增加到30秒，避免网络延迟导致的超时
@@ -72,10 +78,15 @@ api.interceptors.response.use(
     
     // 处理 401 未授权错误
     if (error.response && error.response.status === 401) {
-      // 清除本地存储
+      // 清除本地存储和权限缓存
       localStorage.removeItem('qunkong_token')
       localStorage.removeItem('qunkong_user')
       localStorage.removeItem('qunkong_current_project')
+      
+      // 清除权限缓存
+      if (clearPermissionCacheRef) {
+        clearPermissionCacheRef()
+      }
       
       // 只在非登录页面时跳转
       if (!window.location.pathname.includes('/login')) {

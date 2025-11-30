@@ -13,7 +13,11 @@ import {
   ClockCircleOutlined,
   DesktopOutlined
 } from '@ant-design/icons'
-import { authApi } from './utils/api'
+import { authApi, setPermissionCacheClearer } from './utils/api'
+import { clearPermissionCache } from './hooks/usePermissions'
+
+// 注册权限缓存清除器到 API 模块（避免循环依赖）
+setPermissionCacheClearer(clearPermissionCache)
 import Login from './pages/Login'
 import ProjectSelector from './pages/ProjectSelector'
 import ScriptExecution from './pages/ScriptExecution'
@@ -94,15 +98,18 @@ const MainLayout = () => {
       console.error('登出失败:', error)
     }
 
+    // 清除所有本地存储和缓存
     localStorage.removeItem('qunkong_token')
     localStorage.removeItem('qunkong_user')
     localStorage.removeItem('qunkong_remember')
+    clearPermissionCache()  // 清除权限缓存
     message.success('已退出登录')
     navigate('/login')
   }
 
   const switchProject = () => {
     localStorage.removeItem('qunkong_current_project')
+    clearPermissionCache()  // 切换项目时清除权限缓存
     navigate('/select-project')
   }
 

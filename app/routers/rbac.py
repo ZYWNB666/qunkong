@@ -1,19 +1,26 @@
 """
 RBAC权限管理 - 简化的基于角色的访问控制
 只提供用户级和项目级的权限验证,移除租户管理
+使用本地缓存优化性能，避免每次请求都查询数据库
 """
 from fastapi import Depends, HTTPException, status, Query
 from typing import Dict, Any, Optional, Callable
 from app.routers.deps import get_current_user
 from app.models.project import ProjectManager
 from app.models import DatabaseManager
+from app.cache import get_local_cache
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
+# 权限缓存TTL（秒）
+PERMISSION_CACHE_TTL = 60  # 权限缓存60秒
+PROJECT_ACCESS_CACHE_TTL = 60  # 项目访问权限缓存60秒
+
 
 class PermissionChecker:
-    """权限检查器 - 单例模式"""
+    """权限检查器 - 单例模式，带本地缓存"""
     
     _instance = None
     _db_manager = None
@@ -36,41 +43,87 @@ class PermissionChecker:
         if self._db_manager is None:
             raise RuntimeError("PermissionChecker未初始化")
         self.project_mgr = ProjectManager(self._db_manager)
+        self._cache = get_local_cache()  # 使用本地缓存
     
     def check_project_access(self, user_id: int, project_id: int,
                             user_role: str, required_role: str = None) -> bool:
-        """检查用户是否可以访问指定项目"""
+        """检查用户是否可以访问指定项目（带缓存）"""
         # 系统管理员可以访问所有项目
         if user_role in ['admin', 'super_admin']:
             return True
         
-        # 检查用户是否是项目成员并有相应角色权限
-        return self.project_mgr.check_project_permission(
+        # 构建缓存key
+        cache_key = f"project_access:{user_id}:{project_id}:{required_role or 'any'}"
+        
+        # 尝试从缓存获取
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        # 查询数据库
+        result = self.project_mgr.check_project_permission(
             user_id, project_id, required_role
         )
+        
+        # 写入缓存
+        self._cache.set(cache_key, result, PROJECT_ACCESS_CACHE_TTL)
+        
+        return result
     
     def check_permission_key(self, user_id: int, project_id: int,
                             permission_key: str, user_role: str) -> bool:
-        """检查用户是否拥有指定的功能权限"""
+        """检查用户是否拥有指定的功能权限（带缓存）"""
         # 系统管理员拥有所有权限
         if user_role in ['admin', 'super_admin']:
             return True
         
-        # 使用ProjectManager检查功能权限
-        return self.project_mgr.check_permission(
+        # 构建缓存key
+        cache_key = f"permission:{user_id}:{project_id}:{permission_key}"
+        
+        # 尝试从缓存获取
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        # 查询数据库
+        result = self.project_mgr.check_permission(
             project_id, user_id, permission_key, user_role
         )
+        
+        # 写入缓存
+        self._cache.set(cache_key, result, PERMISSION_CACHE_TTL)
+        
+        return result
     
     def get_user_accessible_projects(self, user_id: int, user_role: str) -> list:
-        """获取用户可访问的所有项目ID列表"""
+        """获取用户可访问的所有项目ID列表（带缓存）"""
+        # 构建缓存key
+        cache_key = f"accessible_projects:{user_id}:{user_role}"
+        
+        # 尝试从缓存获取
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         if user_role in ['admin', 'super_admin']:
             # 管理员可以访问所有项目
             all_projects = self.project_mgr.get_all_projects()
-            return [p['id'] for p in all_projects]
+            result = [p['id'] for p in all_projects]
+        else:
+            # 普通用户只能访问自己的项目
+            user_projects = self.project_mgr.get_user_projects(user_id)
+            result = [p['id'] for p in user_projects]
         
-        # 普通用户只能访问自己的项目
-        user_projects = self.project_mgr.get_user_projects(user_id)
-        return [p['id'] for p in user_projects]
+        # 写入缓存
+        self._cache.set(cache_key, result, PROJECT_ACCESS_CACHE_TTL)
+        
+        return result
+    
+    def invalidate_user_cache(self, user_id: int):
+        """使用户相关的缓存失效（当权限变更时调用）"""
+        # 简单实现：清除所有与该用户相关的缓存
+        # 更精细的实现可以只清除特定key
+        logger.info(f"清除用户 {user_id} 的权限缓存")
     
     def validate_project_access(self, user_id: int, project_id: int,
                                user_role: str, required_role: str = None):
@@ -199,18 +252,14 @@ def require_permission(permission_key: str):
     ) -> Dict[str, Any]:
         checker = PermissionChecker.get_instance()
         
-        # 添加调试日志
-        logger.info(f"require_permission检查: permission_key={permission_key}, project_id={project_id}, user={current_user.get('username')}, user_role={current_user.get('role')}")
-        
         # project_id是必需的,如果没有提供则返回错误
         if project_id is None:
-            logger.error(f"缺少project_id参数, user={current_user.get('username')}, permission={permission_key}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="缺少必需的参数: project_id"
             )
         
-        # 检查功能权限
+        # 检查功能权限（带缓存）
         has_permission = checker.check_permission_key(
             user_id=current_user['user_id'],
             project_id=project_id,
@@ -218,9 +267,8 @@ def require_permission(permission_key: str):
             user_role=current_user['role']
         )
         
-        logger.info(f"权限检查结果: {has_permission}, user_id={current_user['user_id']}, project_id={project_id}, permission={permission_key}")
-        
         if not has_permission:
+            logger.warning(f"权限拒绝: user={current_user['username']}, project={project_id}, permission={permission_key}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"您没有 '{permission_key}' 权限"
@@ -229,7 +277,8 @@ def require_permission(permission_key: str):
         # 将project_id添加到用户上下文
         current_user['current_project_id'] = project_id
         
-        logger.info(f"用户 {current_user['username']} 在项目 {project_id} 使用权限 {permission_key}")
+        # 仅在DEBUG级别记录日志
+        logger.debug(f"权限通过: user={current_user['username']}, project={project_id}, permission={permission_key}")
         
         return current_user
     

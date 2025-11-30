@@ -8,13 +8,17 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import json
+from dbutils.pooled_db import PooledDB
 
 class DatabaseManager:
-    """数据库管理器"""
+    """数据库管理器 - 使用连接池优化性能"""
+    
+    _pool = None  # 类级别的连接池单例
     
     def __init__(self, config_path: str = "config/database.conf"):
         self.config_path = config_path
         self.db_config = self._load_config()
+        self._init_pool()  # 初始化连接池
         self.init_database()
     
     def _load_config(self) -> Dict[str, Any]:
@@ -33,21 +37,39 @@ class DatabaseManager:
             'password': config.get('mysql', 'password'),
             'charset': config.get('mysql', 'charset', fallback='utf8mb4'),
             'max_connections': config.getint('connection', 'max_connections', fallback=20),
+            'min_connections': config.getint('connection', 'min_connections', fallback=5),
             'timeout': config.getint('connection', 'timeout', fallback=30)
         }
     
+    def _init_pool(self):
+        """初始化数据库连接池"""
+        if DatabaseManager._pool is None:
+            DatabaseManager._pool = PooledDB(
+                creator=pymysql,
+                maxconnections=self.db_config['max_connections'],  # 最大连接数
+                mincached=self.db_config.get('min_connections', 5),  # 初始化时创建的空闲连接数
+                maxcached=self.db_config['max_connections'],  # 最大空闲连接数
+                maxshared=0,  # 0表示所有连接都是专用的
+                blocking=True,  # 连接池耗尽时阻塞等待
+                maxusage=None,  # 单个连接最大复用次数，None表示无限制
+                setsession=[],  # 开始会话时执行的SQL命令列表
+                ping=1,  # 每次获取连接时检查连接是否可用 (0=None, 1=default, 2=always)
+                host=self.db_config['host'],
+                port=self.db_config['port'],
+                user=self.db_config['username'],
+                password=self.db_config['password'],
+                database=self.db_config['database'],
+                charset=self.db_config['charset'],
+                autocommit=True,
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            print(f"数据库连接池已初始化: max={self.db_config['max_connections']}, min={self.db_config.get('min_connections', 5)}")
+    
     def _get_connection(self):
-        """获取数据库连接"""
-        return pymysql.connect(
-            host=self.db_config['host'],
-            port=self.db_config['port'],
-            user=self.db_config['username'],
-            password=self.db_config['password'],
-            database=self.db_config['database'],
-            charset=self.db_config['charset'],
-            autocommit=True,
-            cursorclass=pymysql.cursors.DictCursor
-        )
+        """从连接池获取数据库连接"""
+        if DatabaseManager._pool is None:
+            self._init_pool()
+        return DatabaseManager._pool.connection()
     
     def init_database(self):
         """初始化数据库表"""
